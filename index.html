@@ -1,0 +1,2737 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Carte de Risques Systémiques — Boucles de rétroaction</title>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/cytoscape/3.28.1/cytoscape.min.js"></script>
+<style>
+  @import url('https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@300;400;600&family=IBM+Plex+Sans:wght@300;400;600&display=swap');
+
+  :root {
+    --bg: #0a0a0f;
+    --panel: #10101a;
+    --panel-elev: #15151f;
+    --border: #2a2a3a;
+    --border-soft: #1f1f2c;
+
+    --source: #c0392b;
+    --amplifier: #e67e22;
+    --output: #2980b9;
+    --stabilizer: #27ae60;
+    --geo: #c9a227;
+
+    --text: #e8e8f0;
+    --text-dim: #888899;
+    --text-soft: #5a5a6e;
+    --accent: #7c5cbf;
+
+    /* Couleurs loops désaturées — science comportementale :
+       un rouge trop vif déclenche le stress, inhibe l'apprentissage.
+       Palette terre/ambre pour amplification (alerte sans panique)
+       Palette teal/sage pour stabilisation (calme, confiance) */
+    --loop-amp-1: #e67e22;
+    --loop-amp-2: #d35400;
+    --loop-amp-glow: rgba(230, 126, 34, 0.5);
+    --loop-amp-bg: rgba(230, 126, 34, 0.08);
+
+    --loop-stab-1: #4eb583;
+    --loop-stab-2: #2a8d5f;
+    --loop-stab-glow: rgba(78, 181, 131, 0.5);
+    --loop-stab-bg: rgba(78, 181, 131, 0.08);
+
+    --edge-default: #3a3a5a;
+
+    /* Easing cubic-bezier basé sur la perception : 
+       "ease-out-quart" pour les entrées (naturel, anticipation)
+       "ease-in-out-quart" pour transitions d'état */
+    --ease-out: cubic-bezier(0.165, 0.84, 0.44, 1);
+    --ease-inout: cubic-bezier(0.77, 0, 0.175, 1);
+    --ease-soft: cubic-bezier(0.25, 0.46, 0.45, 0.94);
+  }
+
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+
+  body {
+    font-family: 'IBM Plex Sans', sans-serif;
+    background: var(--bg);
+    color: var(--text);
+    height: 100vh;
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+    -webkit-font-smoothing: antialiased;
+  }
+
+  header {
+    padding: 10px 20px;
+    background: var(--panel);
+    border-bottom: 1px solid var(--border);
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    flex-shrink: 0;
+    z-index: 10;
+    gap: 16px;
+  }
+
+  header h1 {
+    font-family: 'IBM Plex Sans', sans-serif;
+    font-size: 15px;
+    font-weight: 400;
+    font-style: italic;
+    letter-spacing: 0.01em;
+    color: var(--text);
+  }
+
+  .controls {
+    display: flex;
+    gap: 8px;
+    align-items: center;
+    flex-wrap: wrap;
+  }
+
+  .btn {
+    font-family: 'IBM Plex Mono', monospace;
+    font-size: 10px;
+    padding: 6px 11px;
+    border: 1px solid var(--border);
+    background: transparent;
+    color: var(--text-dim);
+    cursor: pointer;
+    border-radius: 3px;
+    transition: all 280ms var(--ease-out);
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+  }
+  .btn:hover {
+    border-color: var(--accent);
+    color: var(--text);
+    transform: translateY(-1px);
+  }
+  .btn.active {
+    background: var(--accent);
+    border-color: var(--accent);
+    color: #fff;
+  }
+  .btn-loop {
+    border-color: #5a4a6a;
+    color: #b0a0c8;
+    position: relative;
+  }
+  .btn-loop.active {
+    background: linear-gradient(135deg, var(--loop-amp-1), var(--loop-stab-1));
+    border-color: transparent;
+    color: #fff;
+    box-shadow: 0 0 20px rgba(124, 92, 191, 0.3);
+  }
+
+  /* ============ BOUTON SIMULATION ============ */
+  .btn-sim {
+    border-color: #ff6633;
+    color: #ff6633;
+    font-weight: 600;
+  }
+  .btn-sim:hover { background: #2a1000; color: #ffaa66; }
+  .btn-sim.active {
+    background: #ff3300;
+    border-color: #ff3300;
+    color: #fff;
+    box-shadow: 0 0 16px rgba(255, 51, 0, 0.4);
+  }
+
+  /* ============ CURSEUR DE SIMULATION ============ */
+  #cy.sim-cursor { cursor: crosshair; }
+
+  /* ============ HINT OVERLAY ============ */
+  #sim-hint {
+    display: none;
+    position: absolute;
+    top: 50%;
+    left: 50%;
+    transform: translate(-50%, -50%);
+    background: rgba(18, 8, 0, 0.92);
+    border: 1px solid #ff4400;
+    border-radius: 6px;
+    padding: 16px 24px;
+    text-align: center;
+    pointer-events: none;
+    z-index: 100;
+    animation: fadeInHint 0.3s ease;
+  }
+  #sim-hint.visible { display: block; }
+  #sim-hint p {
+    font-family: 'IBM Plex Mono', monospace;
+    font-size: 12px;
+    color: #ff9966;
+    margin: 0;
+  }
+  #sim-hint small {
+    font-family: 'IBM Plex Mono', monospace;
+    font-size: 9px;
+    color: #885533;
+    display: block;
+    margin-top: 4px;
+  }
+  @keyframes fadeInHint {
+    from { opacity: 0; transform: translate(-50%, -48%); }
+    to   { opacity: 1; transform: translate(-50%, -50%); }
+  }
+
+  /* ============ PANNEAU DE SIMULATION (sidebar) ============ */
+  .sim-panel {
+    display: none;
+    padding: 14px;
+    border-bottom: 1px solid #2a1800;
+    background: #120a00;
+    flex-shrink: 0;
+  }
+  .sim-panel.visible { display: block; }
+  .sim-panel h3 {
+    font-family: 'IBM Plex Mono', monospace;
+    font-size: 9px;
+    text-transform: uppercase;
+    letter-spacing: 0.1em;
+    color: #ff6633;
+    margin-bottom: 10px;
+  }
+  .sim-node-name {
+    font-size: 12px;
+    font-weight: 600;
+    color: #fff;
+    margin-bottom: 10px;
+    line-height: 1.4;
+  }
+
+  /* ---- Toggle stabilisateurs ---- */
+  .sim-toggle-row {
+    margin-bottom: 10px;
+    padding-bottom: 10px;
+    border-bottom: 1px solid #2a1800;
+  }
+  .sim-toggle {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    cursor: pointer;
+    user-select: none;
+  }
+  .sim-toggle input { display: none; }
+  .sim-toggle-slider {
+    position: relative;
+    width: 32px;
+    height: 18px;
+    background: #2a1800;
+    border: 1px solid #443322;
+    border-radius: 10px;
+    flex-shrink: 0;
+    transition: all 0.2s;
+  }
+  .sim-toggle-slider::after {
+    content: '';
+    position: absolute;
+    top: 2px;
+    left: 2px;
+    width: 12px;
+    height: 12px;
+    background: #664433;
+    border-radius: 50%;
+    transition: all 0.2s;
+  }
+  .sim-toggle input:checked + .sim-toggle-slider {
+    background: #0a2a14;
+    border-color: #27ae60;
+  }
+  .sim-toggle input:checked + .sim-toggle-slider::after {
+    left: 16px;
+    background: #5fcc88;
+  }
+  .sim-toggle-label {
+    font-family: 'IBM Plex Mono', monospace;
+    font-size: 10px;
+    color: #ff9966;
+    letter-spacing: 0.04em;
+  }
+  .sim-toggle input:checked ~ .sim-toggle-label { color: #5fcc88; }
+  .sim-toggle-hint {
+    font-family: 'IBM Plex Sans', sans-serif;
+    font-size: 9.5px;
+    color: #664433;
+    line-height: 1.4;
+    margin-top: 4px;
+    padding-left: 42px;
+  }
+  .sim-panel.stab-off .sim-toggle-hint {
+    color: #a0523a;
+  }
+
+  /* ---- Bouton principal de lancement ---- */
+  .sim-launch-btn {
+    width: 100%;
+    font-family: 'IBM Plex Mono', monospace;
+    font-size: 11px;
+    font-weight: 600;
+    padding: 10px;
+    border: 1px solid #ff4400;
+    background: linear-gradient(135deg, #2a0a00, #3a1000);
+    color: #ffaa66;
+    cursor: pointer;
+    border-radius: 3px;
+    transition: all 0.15s;
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+    margin-bottom: 10px;
+  }
+  .sim-launch-btn:hover {
+    background: linear-gradient(135deg, #3a1000, #4a1800);
+    border-color: #ff6633;
+    color: #ffcc99;
+    box-shadow: 0 0 14px rgba(255, 68, 0, 0.3);
+  }
+  .sim-launch-btn:active {
+    transform: translateY(1px);
+  }
+  .sim-status {
+    font-family: 'IBM Plex Mono', monospace;
+    font-size: 9px;
+    color: #ff9966;
+    line-height: 1.6;
+    min-height: 30px;
+  }
+  .sim-reset-btn {
+    margin-top: 8px;
+    width: 100%;
+    font-family: 'IBM Plex Mono', monospace;
+    font-size: 9px;
+    padding: 5px;
+    border: 1px solid #443322;
+    background: transparent;
+    color: #664433;
+    cursor: pointer;
+    border-radius: 3px;
+    transition: all 0.15s;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    display: none;
+  }
+  .sim-reset-btn.visible { display: block; }
+  .sim-reset-btn:hover { background: #2a1000; color: #ff6633; border-color: #ff6633; }
+
+  .main {
+    display: flex;
+    flex: 1;
+    overflow: hidden;
+  }
+
+  #cy {
+    position: absolute;
+    inset: 0;
+    background: var(--bg);
+    transition: opacity 400ms var(--ease-soft);
+  }
+
+  .sidebar {
+    width: 310px;
+    background: var(--panel);
+    border-left: 1px solid var(--border);
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+    flex-shrink: 0;
+  }
+
+  /* ============ PANNEAU LÉGENDE (standard) ============ */
+  .legend {
+    padding: 14px;
+    border-bottom: 1px solid var(--border);
+  }
+
+  .legend h3 {
+    font-family: 'IBM Plex Mono', monospace;
+    font-size: 10px;
+    text-transform: uppercase;
+    letter-spacing: 0.1em;
+    color: var(--text-dim);
+    margin-bottom: 10px;
+  }
+
+  .legend-item, .legend-edge {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin-bottom: 7px;
+    font-size: 11px;
+  }
+  .legend-item { color: var(--text); }
+  .legend-edge { color: var(--text-dim); }
+
+  .legend-dot {
+    width: 12px;
+    height: 12px;
+    border-radius: 2px;
+    flex-shrink: 0;
+  }
+  .edge-line {
+    width: 28px;
+    height: 2px;
+    flex-shrink: 0;
+  }
+
+  /* ============ PANNEAU BOUCLES (nouveau) ============ */
+  .loops-panel {
+    display: none;
+    flex-direction: column;
+    overflow: hidden;
+    flex: 1;
+  }
+  .loops-panel.active { display: flex; }
+
+  .loops-intro {
+    padding: 12px 14px;
+    border-bottom: 1px solid var(--border);
+    font-size: 11px;
+    line-height: 1.55;
+    color: var(--text-dim);
+    background: var(--panel-elev);
+  }
+  .loops-intro strong { color: var(--text); }
+
+  .loops-section {
+    padding: 10px 14px 6px;
+    font-family: 'IBM Plex Mono', monospace;
+    font-size: 9px;
+    text-transform: uppercase;
+    letter-spacing: 0.1em;
+    color: var(--text-dim);
+    display: flex;
+    align-items: center;
+    gap: 8px;
+  }
+  .loops-section-amp { color: var(--loop-amp-1); }
+  .loops-section-stab { color: var(--loop-stab-1); }
+
+  .loop-list {
+    padding: 0 10px;
+    overflow-y: auto;
+  }
+
+  .loop-card {
+    background: var(--panel-elev);
+    border: 1px solid var(--border);
+    border-radius: 5px;
+    padding: 10px 12px;
+    margin-bottom: 7px;
+    cursor: pointer;
+    transition: all 280ms var(--ease-out);
+    position: relative;
+  }
+  .loop-card:hover {
+    transform: translateX(-2px);
+    border-color: var(--text-soft);
+  }
+  .loop-card.active {
+    background: #191924;
+    border-left-width: 3px;
+  }
+  .loop-card.amp {
+    border-left: 3px solid var(--loop-amp-1);
+  }
+  .loop-card.stab {
+    border-left: 3px solid var(--loop-stab-1);
+  }
+  .loop-card.amp.active {
+    border-color: var(--loop-amp-1);
+    box-shadow: 0 0 0 1px var(--loop-amp-1), 0 4px 16px var(--loop-amp-bg);
+  }
+  .loop-card.stab.active {
+    border-color: var(--loop-stab-1);
+    box-shadow: 0 0 0 1px var(--loop-stab-1), 0 4px 16px var(--loop-stab-bg);
+  }
+
+  .loop-card-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: 4px;
+  }
+  .loop-card-name {
+    font-size: 11.5px;
+    font-weight: 600;
+    color: var(--text);
+    line-height: 1.3;
+  }
+  .loop-card-steps {
+    font-family: 'IBM Plex Mono', monospace;
+    font-size: 9px;
+    padding: 2px 6px;
+    border-radius: 8px;
+    border: 1px solid var(--border);
+    color: var(--text-dim);
+    white-space: nowrap;
+  }
+  .loop-card.amp.active .loop-card-steps { color: var(--loop-amp-1); border-color: var(--loop-amp-1); }
+  .loop-card.stab.active .loop-card-steps { color: var(--loop-stab-1); border-color: var(--loop-stab-1); }
+
+  .loop-card-desc {
+    font-size: 10.5px;
+    color: var(--text-dim);
+    line-height: 1.5;
+    margin-top: 4px;
+  }
+
+  /* Détails boucle active */
+  .loop-detail {
+    padding: 14px;
+    border-top: 1px solid var(--border);
+    background: var(--panel-elev);
+    font-size: 11px;
+    line-height: 1.6;
+    color: var(--text-dim);
+    animation: fadeInUp 320ms var(--ease-out);
+  }
+  .loop-detail-title {
+    font-size: 12px;
+    font-weight: 600;
+    color: var(--text);
+    margin-bottom: 8px;
+  }
+  .loop-detail-mech {
+    font-size: 11px;
+    color: var(--text);
+    line-height: 1.65;
+    padding: 8px 10px;
+    border-radius: 3px;
+    margin: 8px 0;
+  }
+  .loop-detail-mech.amp { background: var(--loop-amp-bg); border-left: 2px solid var(--loop-amp-1); }
+  .loop-detail-mech.stab { background: var(--loop-stab-bg); border-left: 2px solid var(--loop-stab-1); }
+
+  .loop-path {
+    font-family: 'IBM Plex Mono', monospace;
+    font-size: 10px;
+    line-height: 1.9;
+    color: var(--text);
+    padding: 6px 0;
+  }
+  .loop-path .step-num {
+    display: inline-block;
+    width: 16px;
+    height: 16px;
+    line-height: 16px;
+    text-align: center;
+    border-radius: 50%;
+    font-size: 9px;
+    margin-right: 6px;
+    font-weight: 600;
+  }
+  .loop-path.amp .step-num { background: var(--loop-amp-bg); color: var(--loop-amp-1); border: 1px solid var(--loop-amp-1); }
+  .loop-path.stab .step-num { background: var(--loop-stab-bg); color: var(--loop-stab-1); border: 1px solid var(--loop-stab-1); }
+  .loop-path .step-arrow {
+    color: var(--text-soft);
+    margin-left: 22px;
+    display: block;
+    padding: 4px 0 8px 0;
+    line-height: 1.5;
+  }
+  .loop-path .step-text {
+    font-family: 'IBM Plex Sans', sans-serif;
+    font-size: 10.5px;
+    color: var(--text-dim);
+    margin-left: 4px;
+  }
+  .loop-path.amp .step-text { color: #d8a070; }
+  .loop-path.stab .step-text { color: #80c8a0; }
+
+  @keyframes fadeInUp {
+    from { opacity: 0; transform: translateY(8px); }
+    to { opacity: 1; transform: translateY(0); }
+  }
+
+  /* ============ STATS ============ */
+  .stats-row {
+    display: flex;
+    gap: 12px;
+    padding: 9px 14px;
+    border-bottom: 1px solid var(--border);
+    flex-wrap: wrap;
+    background: var(--panel);
+  }
+  .stat {
+    font-family: 'IBM Plex Mono', monospace;
+    font-size: 10px;
+    color: var(--text-dim);
+  }
+  .stat span { color: var(--text); font-weight: 600; }
+
+  /* ============ DÉTAIL DU NŒUD ============ */
+  .info-panel {
+    flex: 1;
+    padding: 14px;
+    overflow-y: auto;
+  }
+  .info-panel h3 {
+    font-family: 'IBM Plex Mono', monospace;
+    font-size: 10px;
+    text-transform: uppercase;
+    letter-spacing: 0.1em;
+    color: var(--text-dim);
+    margin-bottom: 10px;
+  }
+  #node-title {
+    font-size: 13px;
+    font-weight: 600;
+    color: var(--text);
+    margin-bottom: 8px;
+    line-height: 1.4;
+  }
+  #node-type-badge {
+    display: inline-block;
+    font-family: 'IBM Plex Mono', monospace;
+    font-size: 9px;
+    padding: 2px 7px;
+    border-radius: 2px;
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+    margin-bottom: 10px;
+  }
+  #node-desc {
+    font-size: 11px;
+    line-height: 1.7;
+    color: var(--text-dim);
+    white-space: pre-wrap;
+    border-top: 1px solid var(--border);
+    padding-top: 10px;
+    margin-top: 5px;
+  }
+  #connections-info {
+    margin-top: 12px;
+    font-size: 11px;
+    color: var(--text-dim);
+    border-top: 1px solid var(--border);
+    padding-top: 10px;
+  }
+  .conn-label {
+    font-family: 'IBM Plex Mono', monospace;
+    font-size: 9px;
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+    color: var(--text-dim);
+    margin-bottom: 4px;
+    margin-top: 8px;
+  }
+  .conn-item {
+    padding: 2px 0;
+    font-size: 11px;
+    color: var(--text);
+  }
+
+  /* Membre-d'une-boucle badge */
+  .in-loops-badges {
+    margin-top: 10px;
+    padding-top: 10px;
+    border-top: 1px solid var(--border);
+  }
+  .in-loops-badge {
+    display: inline-block;
+    font-family: 'IBM Plex Mono', monospace;
+    font-size: 9px;
+    padding: 3px 8px;
+    margin: 3px 4px 3px 0;
+    border-radius: 10px;
+    cursor: pointer;
+    transition: all 220ms var(--ease-out);
+  }
+  .in-loops-badge.amp {
+    background: var(--loop-amp-bg);
+    color: var(--loop-amp-1);
+    border: 1px solid var(--loop-amp-1);
+  }
+  .in-loops-badge.stab {
+    background: var(--loop-stab-bg);
+    color: var(--loop-stab-1);
+    border: 1px solid var(--loop-stab-1);
+  }
+  .in-loops-badge:hover {
+    transform: translateY(-1px);
+  }
+
+  /* ============ FOOTER ============ */
+  footer {
+    padding: 6px 20px;
+    background: var(--panel);
+    border-top: 1px solid var(--border);
+    font-family: 'IBM Plex Mono', monospace;
+    font-size: 10px;
+    color: var(--text-dim);
+    display: flex;
+    justify-content: space-between;
+    flex-shrink: 0;
+  }
+
+  /* ============ BADGES ============ */
+  .new-badge, .geo-badge, .loop-badge-tag {
+    font-size: 8px;
+    padding: 1px 5px;
+    border-radius: 2px;
+    margin-left: 4px;
+    font-family: 'IBM Plex Mono', monospace;
+    letter-spacing: 0.05em;
+    vertical-align: middle;
+  }
+  .new-badge { background: var(--stabilizer); color: #fff; }
+  .geo-badge { background: var(--geo); color: #000; font-weight: 600; }
+
+  /* ============ BANNIÈRE MODE BOUCLE ============ */
+  .loop-banner {
+    display: none;
+    position: absolute;
+    top: 14px;
+    left: 50%;
+    transform: translateX(-50%);
+    padding: 8px 18px;
+    border-radius: 20px;
+    font-family: 'IBM Plex Mono', monospace;
+    font-size: 11px;
+    letter-spacing: 0.06em;
+    z-index: 50;
+    backdrop-filter: blur(12px);
+    animation: bannerSlide 420ms var(--ease-out);
+    border: 1px solid;
+  }
+  .loop-banner.amp {
+    background: rgba(230, 126, 34, 0.12);
+    border-color: var(--loop-amp-1);
+    color: var(--loop-amp-1);
+  }
+  .loop-banner.stab {
+    background: rgba(78, 181, 131, 0.12);
+    border-color: var(--loop-stab-1);
+    color: var(--loop-stab-1);
+  }
+  .loop-banner.visible { display: block; }
+  .loop-banner-title { font-weight: 600; }
+  .loop-banner-hint {
+    color: var(--text-dim);
+    margin-left: 12px;
+    padding-left: 12px;
+    border-left: 1px solid currentColor;
+    opacity: 0.7;
+  }
+
+  @keyframes bannerSlide {
+    from { opacity: 0; transform: translateX(-50%) translateY(-10px); }
+    to { opacity: 1; transform: translateX(-50%) translateY(0); }
+  }
+
+  .cy-wrapper {
+    flex: 1;
+    position: relative;
+  }
+
+  /* ============ COMPTEUR DE NIVEAU (overlay cascade) ============ */
+  #level-counter {
+    position: absolute;
+    top: 24px;
+    left: 50%;
+    transform: translateX(-50%);
+    padding: 10px 22px;
+    background: rgba(10, 10, 20, 0.85);
+    border: 1px solid rgba(255, 102, 51, 0.4);
+    border-radius: 24px;
+    backdrop-filter: blur(6px);
+    font-family: 'IBM Plex Mono', monospace;
+    font-size: 13px;
+    font-weight: 500;
+    letter-spacing: 0.08em;
+    color: #ffcc88;
+    opacity: 0;
+    pointer-events: none;
+    z-index: 80;
+    transition: opacity 300ms ease, transform 400ms cubic-bezier(0.25, 0.1, 0.25, 1);
+  }
+  #level-counter.visible {
+    opacity: 1;
+  }
+  #level-counter .level-big {
+    font-size: 18px;
+    font-weight: 600;
+    color: #ff9966;
+    margin-right: 6px;
+  }
+  #level-counter .level-label {
+    color: #bbb;
+    font-size: 11px;
+    margin-left: 10px;
+    letter-spacing: 0.05em;
+    font-style: italic;
+  }
+  #level-counter.transitioning {
+    transform: translateX(-50%) scale(1.05);
+  }
+
+  /* ============ OVERLAY DES FLUX DE PROPAGATION ============ */
+  #flux-overlay {
+    position: absolute;
+    inset: 0;
+    pointer-events: none;
+    z-index: 50;
+  }
+  .flux-particle {
+    position: absolute;
+    width: 10px;
+    height: 10px;
+    border-radius: 50%;
+    pointer-events: none;
+    transform: translate(-50%, -50%);
+    filter: blur(0.5px);
+  }
+  /* Couleurs harmonisées avec les types de nœuds de destination */
+  .flux-particle.flux-source    { background: #c0392b; box-shadow: 0 0 14px 3px #c0392b, 0 0 24px 6px #c0392b44; }
+  .flux-particle.flux-amplifier { background: #e67e22; box-shadow: 0 0 14px 3px #e67e22, 0 0 24px 6px #e67e2244; }
+  .flux-particle.flux-output    { background: #2980b9; box-shadow: 0 0 14px 3px #2980b9, 0 0 24px 6px #2980b944; }
+  .flux-particle.flux-geo       { background: #c9a227; box-shadow: 0 0 14px 3px #c9a227, 0 0 24px 6px #c9a22744; }
+  .flux-particle.flux-stabilizer { background: #27ae60; box-shadow: 0 0 14px 3px #27ae60, 0 0 24px 6px #27ae6044; }
+
+  /* Pulsation à l'activation d'un nœud */
+  @keyframes node-pulse {
+    0%   { box-shadow: 0 0 0 0 rgba(255,255,255,0.6); }
+    50%  { box-shadow: 0 0 0 14px rgba(255,255,255,0); }
+    100% { box-shadow: 0 0 0 0 rgba(255,255,255,0); }
+  }
+
+  /* ============ EDGE TOOLTIP (poids + justification) ============ */
+  #edge-tooltip {
+    position: fixed;
+    display: none;
+    z-index: 9999;
+    max-width: 320px;
+    background: #0e0e1c;
+    border: 1px solid #2a2a4a;
+    border-radius: 4px;
+    padding: 10px 12px;
+    pointer-events: none;
+    box-shadow: 0 4px 20px rgba(0,0,0,0.5);
+  }
+  #edge-tooltip .tt-nodes {
+    font-family: 'IBM Plex Mono', monospace;
+    font-size: 8.5px;
+    color: #555577;
+    margin-bottom: 6px;
+  }
+  #edge-tooltip .tt-weight {
+    font-family: 'IBM Plex Mono', monospace;
+    font-size: 9px;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.1em;
+    margin-bottom: 6px;
+    display: flex;
+    align-items: center;
+    gap: 6px;
+  }
+  #edge-tooltip .tt-weight::before {
+    content: '';
+    display: inline-block;
+    width: 22px;
+    height: 3px;
+    background: currentColor;
+    flex-shrink: 0;
+    border-radius: 2px;
+  }
+  #edge-tooltip .tt-justif {
+    font-size: 10.5px;
+    line-height: 1.55;
+    color: #aaaacc;
+  }
+
+  /* ============ LÉGENDE DES POIDS ============ */
+  .weight-legend {
+    padding: 10px 14px;
+    border-top: 0.5px solid var(--border);
+    background: var(--panel);
+  }
+  .weight-legend h4 {
+    font-family: 'IBM Plex Mono', monospace;
+    font-size: 8.5px;
+    text-transform: uppercase;
+    letter-spacing: 0.1em;
+    color: var(--text-dim);
+    margin-bottom: 8px;
+  }
+  .weight-row {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin-bottom: 5px;
+    font-size: 10px;
+  }
+  .w-line {
+    background: #7a8a9a;
+    border-radius: 2px;
+    flex-shrink: 0;
+  }
+  .w-label-main { font-size: 10px; color: var(--text); }
+  .w-label-desc { font-size: 9px; color: #555577; margin-left: 4px; }
+  .w-hint {
+    font-family: 'IBM Plex Mono', monospace;
+    font-size: 8.5px;
+    color: #555577;
+    margin-top: 6px;
+    padding-top: 6px;
+    border-top: 1px solid #1a1a2a;
+  }
+</style>
+</head>
+<body>
+
+<div id="edge-tooltip">
+  <div class="tt-nodes" id="tt-nodes"></div>
+  <div class="tt-weight" id="tt-weight"></div>
+  <div class="tt-justif" id="tt-justif"></div>
+</div>
+
+<header>
+  <h1>Ce qui tient, ce qui cède</h1>
+  <div class="controls">
+    <button class="btn btn-loop" id="btn-loops" onclick="toggleLoopsMode()">🔄 Boucles</button>
+    <button class="btn btn-sim" id="btn-sim" onclick="toggleSimMode()">⚡ Simulation</button>
+    <button class="btn" onclick="resetView()">⌂ Vue</button>
+  </div>
+</header>
+
+<div class="main">
+  <div class="cy-wrapper">
+    <div id="cy"></div>
+    <div class="loop-banner" id="loop-banner">
+      <span class="loop-banner-title" id="loop-banner-title"></span>
+      <span class="loop-banner-hint" id="loop-banner-hint"></span>
+    </div>
+    <div id="flux-overlay"></div>
+    <div id="level-counter">
+      <span class="level-big" id="level-counter-num">1</span>
+      <span>/ <span id="level-counter-total">—</span></span>
+      <span class="level-label" id="level-counter-label">onde en cours</span>
+    </div>
+    <div id="sim-hint">
+      <p>⚡ Mode Simulation actif</p>
+      <small>Cliquez sur n'importe quel nœud pour lancer un choc</small>
+    </div>
+  </div>
+
+  <div class="sidebar">
+    <!-- Légende standard -->
+    <div class="legend" id="legend-standard">
+      <h3>Types de nœuds</h3>
+      <div class="legend-item"><div class="legend-dot" style="background:#c0392b;"></div> Choc exogène / Source</div>
+      <div class="legend-item"><div class="legend-dot" style="background:#e67e22;"></div> Amplificateur</div>
+      <div class="legend-item"><div class="legend-dot" style="background:#2980b9;"></div> Variable de sortie</div>
+      <div class="legend-item"><div class="legend-dot" style="background:#27ae60;"></div> Variable d'ajustement</div>
+      <div class="legend-item"><div class="legend-dot" style="background:#c9a227;"></div> Angle mort géopolitique</div>
+    </div>
+
+    <!-- Légende simulation (masquée par défaut, remplace la légende standard en mode sim) -->
+    <div class="legend" id="legend-simulation" style="display:none;">
+      <h3>Intensité du choc</h3>
+      <div class="legend-item"><div class="legend-dot" style="background:#ffffff; border:1px solid #999;"></div> Source du choc</div>
+      <div class="legend-item"><div class="legend-dot" style="background:#ff1010;"></div> Impact fort ≥ 75 %</div>
+      <div class="legend-item"><div class="legend-dot" style="background:#ff7700;"></div> Impact modéré 45–75 %</div>
+      <div class="legend-item"><div class="legend-dot" style="background:#ffcc00;"></div> Impact faible 20–45 %</div>
+      <div class="legend-item"><div class="legend-dot" style="background:#776600;"></div> Impact résiduel 5–20 %</div>
+      <div class="legend-item" id="legend-stab-row"><div class="legend-dot" style="background:#27ae60; border:1px solid #5fcc88;"></div> Stabilisateur mobilisé</div>
+    </div>
+
+    <!-- Légende des poids -->
+    <div class="weight-legend" id="legend-weights">
+      <h4>Poids des liaisons</h4>
+      <div class="weight-row">
+        <div class="w-line" style="width:28px; height:4.5px;"></div>
+        <span class="w-label-main">Forte</span>
+        <span class="w-label-desc">quasi-mécanique</span>
+      </div>
+      <div class="weight-row">
+        <div class="w-line" style="width:28px; height:2.2px;"></div>
+        <span class="w-label-main">Modérée</span>
+        <span class="w-label-desc">probabiliste</span>
+      </div>
+      <div class="weight-row">
+        <div class="w-line" style="width:28px; height:1px;"></div>
+        <span class="w-label-main">Faible</span>
+        <span class="w-label-desc">contextuelle</span>
+      </div>
+      <div class="w-hint">↗ Survoler une arête pour voir la justification analytique</div>
+    </div>
+
+    <!-- Panneau boucles -->
+    <div class="loops-panel" id="loops-panel">
+      <div class="loops-intro">
+        <strong>Les boucles de rétroaction</strong> sont le cœur dynamique du système.
+        Les boucles amplificatrices (vicieuses) auto-alimentent les crises.
+        Les boucles stabilisatrices (vertueuses) dissipent les chocs.
+        <br><em style="color:var(--text-soft);font-size:10px;">Cliquez une boucle pour l'isoler et visualiser le flux causal.</em>
+      </div>
+
+      <div class="loops-section loops-section-amp">
+        <span style="width:6px;height:6px;background:var(--loop-amp-1);border-radius:50%;display:inline-block;"></span>
+        Boucles amplificatrices (vicieuses)
+      </div>
+      <div class="loop-list" id="loop-list-amp"></div>
+
+      <div class="loops-section loops-section-stab">
+        <span style="width:6px;height:6px;background:var(--loop-stab-1);border-radius:50%;display:inline-block;"></span>
+        Boucles stabilisatrices (vertueuses)
+      </div>
+      <div class="loop-list" id="loop-list-stab"></div>
+
+      <div id="loop-detail-container"></div>
+    </div>
+
+    <!-- Stats -->
+    <div class="stats-row" id="stats-row">
+      <div class="stat">Nœuds: <span>56</span></div>
+      <div class="stat">Relations: <span>151</span></div>
+      <div class="stat">Boucles: <span style="color:var(--loop-amp-1)">4 amp.</span> + <span style="color:var(--loop-stab-1)">4 stab.</span></div>
+    </div>
+
+    <!-- Panneau de simulation -->
+    <div class="sim-panel" id="sim-panel">
+      <h3>⚡ Simulation de choc</h3>
+      <div class="sim-node-name" id="sim-node-name">—</div>
+
+      <div class="sim-toggle-row">
+        <label class="sim-toggle">
+          <input type="checkbox" id="sim-stab-toggle" checked>
+          <span class="sim-toggle-slider"></span>
+          <span class="sim-toggle-label">Stabilisateurs actifs</span>
+        </label>
+        <div class="sim-toggle-hint" id="sim-toggle-hint">FMI · QE · régulation macroprudentielle · fonds souverains absorbent une partie du choc</div>
+      </div>
+
+      <button class="sim-launch-btn" onclick="runShock()">⚡ Lancer le choc</button>
+
+      <div class="sim-status" id="sim-status">Cliquez un nœud puis lancez le choc.</div>
+      <button class="sim-reset-btn" id="sim-reset-btn" onclick="resetSimulation()">✕ Réinitialiser la simulation</button>
+    </div>
+
+    <!-- Détail nœud -->
+    <div class="info-panel" id="info-panel">
+      <h3>Détail du nœud sélectionné</h3>
+      <div id="node-detail">
+        <p style="color:#555;font-size:11px;line-height:1.6;">Cliquez sur un nœud pour afficher ses détails et ses boucles d'appartenance.</p>
+      </div>
+    </div>
+  </div>
+</div>
+
+<footer>
+  <span>Molette = zoom · Clic+glisser = déplacer · Clic nœud = détails · Mode Boucles = isoler un cycle</span>
+  <span>v2 — Boucles explicites & design orienté apprentissage</span>
+</footer>
+
+<script>
+// ============================================================
+// NŒUDS 
+// ============================================================
+const nodes = [
+  { id: 'frag_geo', label: 'Fragmentation\ngéopolitique', type: 'source', original: true, desc: 'Nature : Accélérateur systémique\nRôle : Fragmente les chaînes, perturbe les standards\n\nCORRECTION : Mieux distingué des sanctions bilatérales.', x: 1500, y: 70 },
+  { id: 'demo', label: 'Démographie', type: 'source', original: true, desc: 'Nature : Évolution lente de résilience\nRôle : Dégrade progressivement les marges de manœuvre sans choc brutal.\n\nCORRECTION : Effets BIDIRECTIONNELS — peut aussi libérer des contraintes selon les contextes.', x: 200, y: 70 },
+  { id: 'climat', label: 'Risque climatique', type: 'source', original: true, desc: 'Contrainte de réallocation durable. Renchérit le capital, dégrade l\'assurabilité.', x: 420, y: 70 },
+  { id: 'cyber', label: 'Cyber-risque', type: 'source', original: true, desc: 'CORRECTION MAJEURE : Peut suspendre les paiements ET endommager physiquement les infrastructures (Stuxnet, Colonial Pipeline).', x: 70, y: 300 },
+
+  { id: 'sanctions', label: 'Tensions, sanctions\net blocs', type: 'amplifier', original: true, desc: 'Ruptures, relocalisations forcées, blocs alternatifs (BRICS+, dédollarisation).', x: 1650, y: 180 },
+  { id: 'chaines', label: 'Chaînes logistiques\net industrielles', type: 'amplifier', original: true, desc: 'Couple de transmission directe entre géopolitique, énergie et systèmes productifs.', x: 1200, y: 130 },
+  { id: 'energie', label: 'Énergie et matières\npremières', type: 'amplifier', original: true, desc: 'Lien de transmission réelle entre géopolitique et systèmes industriels.', x: 1380, y: 230 },
+  { id: 'conflits_normes', label: 'Conflits de normes\net d\'accès', type: 'amplifier', original: true, desc: 'Résultat de la fragmentation sur les standards technologiques et réglementaires.', x: 1100, y: 270 },
+
+  { id: 'bilan_fiscal', label: 'Bilan fiscal et\ndépenses accrues', type: 'amplifier', original: true, desc: 'Pression fiscale et dépenses accrues : résultat cumulé des chocs.', x: 490, y: 170 },
+  { id: 'dette', label: 'Dette souveraine', type: 'amplifier', original: true, desc: 'Macro-structurel. Mesure endogène qui réduit la marge de réponse à TOUS les chocs.\n\n⚡ Nœud pivot de la SPIRALE DETTE-PRODUCTIVITÉ.', x: 680, y: 170 },
+
+  { id: 'taux', label: 'Taux d\'intérêts /\ncoût du capital', type: 'amplifier', original: true, desc: 'Canal de transmission entre dette, climat, investissement, valorisations.\n\n⚡ Nœud pivot : la hausse peut RESTAURER la crédibilité (boucle stabilisatrice via QT).', x: 1100, y: 350 },
+  { id: 'inflation', label: 'Inflation\nstructurelle', type: 'amplifier', original: true, desc: 'Traduction monétaire des chocs énergie, chaînes, géopolitique.', x: 1430, y: 340 },
+  { id: 'hausse_primes', label: 'Hausse des\nprimes de risque', type: 'amplifier', original: true, desc: 'Résultat : instabilité politique + fragmentation monétaire + hausse des taux.', x: 1280, y: 430 },
+  { id: 'fnb', label: 'Finance non bancaire\n(Private credit,\nHedge funds)', type: 'amplifier', original: true, desc: 'CORRECTION MAJEURE : Les fonds souverains ont été séparés de ce nœud (profil de risque opposé).', x: 760, y: 390 },
+  { id: 'liquidite', label: 'Liquidité globale /\ndollar funding', type: 'amplifier', original: true, desc: 'Canal de stress financier transfrontalier.\n\n⚡ Nœud pivot : cœur de la crise de LIQUIDITÉ AUTO-AMPLIFIÉE.', x: 760, y: 540 },
+  { id: 'assurabilite', label: 'Assurabilité /\nréassurance', type: 'amplifier', original: true, desc: 'CORRECTION : Peut aussi être mécanisme de mutualisation et stabilisation.', x: 1280, y: 540 },
+
+  { id: 'concentration', label: 'Concentration du\npouvoir / IA', type: 'amplifier', original: true, desc: 'CORRECTION : L\'IA ne figurait que comme risque. Ajout des gains compensateurs via "Innovation".', x: 100, y: 450 },
+  { id: 'infra', label: 'Infrastructures\ncritiques', type: 'amplifier', original: true, desc: 'Réseau support paiements, énergie, cloud, transport.', x: 220, y: 630 },
+
+  { id: 'productivite', label: 'Productivité réelle', type: 'output', original: true, desc: 'Variable de sortie affectant croissance, solvabilité, cohésion sociale.\n\n⚡ Nœud pivot de la SPIRALE DETTE-PRODUCTIVITÉ et du DIVIDENDE DE CONFIANCE.', x: 950, y: 400 },
+  { id: 'desorg', label: 'Désorganisation\nproductive', type: 'output', original: true, desc: 'Canal de sortie principal. Résulte des chocs sur les chaînes et la concentration.', x: 400, y: 360 },
+  { id: 'compression_inv', label: 'Compression\ninvestissement', type: 'output', original: true, desc: 'Canal de sortie principal de la hausse des taux et incertitude.\n\n⚡ Nœud pivot du DIVIDENDE DE CONFIANCE.', x: 1100, y: 490 },
+  { id: 'compression_marges', label: 'Compression\ndes marges', type: 'output', original: true, desc: 'Solvabilité des entreprises, salaires réels, cohésion sociale.', x: 1460, y: 480 },
+  { id: 'rarete_main_oeuvre', label: 'Rareté de\nmain-d\'œuvre /\ndépendance', type: 'amplifier', original: true, desc: 'Résulte de la démographie. Amplifie l\'inflation salariale.', x: 320, y: 250 },
+
+  { id: 'stablecoins', label: 'Stablecoins\nprivés & crypto', type: 'amplifier', original: false, desc: 'SÉPARATION : Stablecoins (fragmentants) vs CBDC (stabilisateurs) — rôles opposés.', x: 1060, y: 680 },
+  { id: 'reorg_monetaire', label: 'Réorganisation\nmonétaire', type: 'amplifier', original: true, desc: 'Fragmentation des réserves mondiales, concurrence entre systèmes monétaires.', x: 910, y: 780 },
+  { id: 'instab_regles', label: 'Instabilité des\nrègles du jeu', type: 'amplifier', original: true, desc: 'L\'incertitude réglementaire comprime l\'investissement de long terme.', x: 1080, y: 780 },
+  { id: 'fragm_monetaire', label: 'Fragmentation\nmonétaire', type: 'amplifier', original: true, desc: 'Amplifie l\'instabilité des changes.', x: 1250, y: 680 },
+  { id: 'instab_pol', label: 'Instabilité\npolitique et sociale', type: 'amplifier', original: true, desc: 'Récepteur final et re-amplificateur.\n\n⚡ Nœud pivot du DOOM-LOOP POLITICO-RÉGLEMENTAIRE.', x: 660, y: 760 },
+  { id: 'erosion_reg', label: 'Érosion\nréglementaire', type: 'amplifier', original: true, desc: 'Effet retour politique : amplifie l\'incertitude, réduit la supervision.\n\n⚡ Nœud pivot du DOOM-LOOP POLITICO-RÉGLEMENTAIRE.', x: 880, y: 900 },
+  { id: 'perte_lisibilite', label: 'Perte de lisibilité\ndu système', type: 'output', original: true, desc: 'Opacité → réduit prévisibilité, alimente instabilité.', x: 660, y: 900 },
+  { id: 'devaluation', label: 'Dévaluation\nd\'actifs', type: 'output', original: true, desc: 'Prix compressés par hausse taux + primes + désorganisation.', x: 1290, y: 600 },
+  { id: 'frustration_distrib', label: 'Frustration\ndistributive', type: 'output', original: true, desc: 'Résultante compression marges + désorganisation sur tissu social.', x: 1100, y: 680 },
+  { id: 'confiance', label: 'Confiance monétaire\net institutionnelle', type: 'output', original: true, desc: 'Variable de STABILITÉ FINALE du système.\n\n⚡ Nœud pivot du DIVIDENDE DE CONFIANCE et FILET DE SÉCURITÉ.', x: 760, y: 1010 },
+  { id: 'choc_confiance', label: 'Choc de\nconfiance', type: 'amplifier', original: true, desc: 'Événement déclencheur transformant fragilité latente en crise.\n\n⚡ Nœud pivot de la CRISE DE LIQUIDITÉ AUTO-AMPLIFIÉE.', x: 880, y: 840 },
+  { id: 'contagion', label: 'Contagion\npeu visible', type: 'amplifier', original: true, desc: 'Propagation silencieuse entre compartiments financiers.', x: 560, y: 440 },
+  { id: 'fatigue_sociale', label: 'Fatigue\nsociale lente', type: 'amplifier', original: true, desc: 'Érosion graduelle cohésion sociale.', x: 300, y: 800 },
+  { id: 'austerite', label: 'Austérité,\nmonétisation ou\narbitrages forcés', type: 'amplifier', original: true, desc: 'Réponse politique contrainte à la pression dette+taux.', x: 1260, y: 760 },
+  { id: 'stress_refi', label: 'Stress de\nrefinancement\nmondial', type: 'amplifier', original: true, desc: 'Pression sur refinancement souverain et corporate.\n\n⚡ Nœud pivot de la CRISE DE LIQUIDITÉ AUTO-AMPLIFIÉE.', x: 700, y: 660 },
+
+  { id: 'fmi_bri', label: '◆ Coordination\ninternationale\n(FMI, BRI,\nSwap Lines)', type: 'stabilizer', original: false, desc: 'AJOUT — Principal amortisseur des crises souveraines.\n\n⚡ Nœud pivot du FILET DE SÉCURITÉ et de la COORDINATION GLOBALE.', x: 780, y: 270 },
+  { id: 'pol_mon_nc', label: '◆ Politique\nmonétaire non\nconventionnelle\n(QE / QT)', type: 'stabilizer', original: false, desc: 'AJOUT — Principal levier de réponse depuis 2008.\n\n⚡ Nœud pivot du FILET DE SÉCURITÉ MONÉTAIRE.', x: 1130, y: 210 },
+  { id: 'marche_travail', label: '◆ Marché\ndu travail\n(emploi, salaires,\ncohésion)', type: 'stabilizer', original: false, desc: 'AJOUT — Médiateur entre chocs économiques et cohésion.', x: 300, y: 650 },
+  { id: 'innovation', label: '◆ Innovation\ntechnologique\n(gains de\nproductivité)', type: 'stabilizer', original: false, desc: 'AJOUT — Contre-poids au biais doom-loop.\n\n⚡ Nœud pivot de l\'INNOVATION COMPENSATRICE.', x: 150, y: 780 },
+  { id: 'reg_macroprud', label: '◆ Régulation\nmacroprudentielle', type: 'stabilizer', original: false, desc: 'AJOUT — Tampon finance non bancaire / système réel.', x: 570, y: 530 },
+  { id: 'fsouverains', label: '◆ Fonds souverains\n(SWF)', type: 'stabilizer', original: false, desc: 'CORRECTION — Séparé des hedge funds (profil OPPOSÉ : peu leveragés, contra-cycliques).', x: 580, y: 350 },
+  { id: 'cbdc', label: '◆ CBDC\n(Monnaies numériques\nde banque centrale)', type: 'stabilizer', original: false, desc: 'SÉPARATION — Outil de contrôle souverain, opposé aux stablecoins privés.', x: 1050, y: 900 },
+
+  { id: 'chine', label: '★ Chine\n(Nœud géopolitique\nmajeur)', type: 'geo', original: false, geo: true, desc: 'ANGLE MORT MAJEUR — 2e économie, 1er exportateur, contrôle terres rares, système monétaire alternatif.', x: 1820, y: 480 },
+  { id: 'ch_dette_immo', label: 'Dette interne\n& immobilier\nchinois', type: 'geo', original: false, geo: true, desc: 'LGFV, Evergrande. Contagion via liquidité globale.', x: 2010, y: 340 },
+  { id: 'ch_pol_ind', label: 'Politique\nindustrielle\n& subsidies\nchinois', type: 'geo', original: false, geo: true, desc: 'Surproduction subventionnée → compression marges mondiales.', x: 2010, y: 510 },
+  { id: 'ch_yuan', label: 'Yuan numérique\n(e-CNY) &\ndédollarisation', type: 'geo', original: false, geo: true, desc: 'CIPS, accords bilatéraux, fragmentation monétaire.', x: 2010, y: 670 },
+
+  { id: 'em_dettes', label: '★ Dettes EM en\ndevise étrangère\n(Sudden Stop)', type: 'geo', original: false, geo: true, desc: 'ANGLE MORT MAJEUR — Transmission spécifique aux économies émergentes.\n\n⚡ Nœud pivot du SUDDEN STOP ÉMERGENT.', x: -220, y: 720 },
+  { id: 'em_sudden_stop', label: 'Mécanisme\n"Sudden Stop"\n& crise de change', type: 'geo', original: false, geo: true, desc: 'Cascade destructrice : fuite capitaux → effondrement change → explosion dette → crise souveraine.', x: -390, y: 580 },
+  { id: 'em_dependance', label: 'Dépendance aux\nmatières premières\n& monocultures EM', type: 'geo', original: false, geo: true, desc: 'Vulnérabilité des économies mono-exportatrices.', x: -390, y: 860 },
+
+  { id: 'gn_gouvernance', label: '★ Gouvernance\ndes communs\nnumériques', type: 'geo', original: false, geo: true, desc: 'ANGLE MORT MAJEUR — Fragmentation des standards IA, cloud, PI.', x: 860, y: -210 },
+  { id: 'gn_ia', label: 'Fragmentation\ndes standards IA\n& régulation', type: 'geo', original: false, geo: true, desc: 'EU AI Act vs US vs Chine : trois régimes incompatibles.', x: 600, y: -360 },
+  { id: 'gn_cloud', label: 'Contrôle des\ninfrastructures\ncloud & données', type: 'geo', original: false, geo: true, desc: 'Hyperscalers US vs cloud souverain vs Huawei.', x: 960, y: -360 },
+  { id: 'gn_pi', label: 'Guerre des\nbrevets &\npropriété\nintellectuelle', type: 'geo', original: false, geo: true, desc: 'Semi-conducteurs, SEP, transferts forcés.', x: 1180, y: -280 },
+];
+
+// ============================================================
+// ASSIGNATION DES NŒUDS AUX BLOCS THÉMATIQUES
+// ============================================================
+const nodeBlocks = {
+  // Macro-financier & monétaire
+  bilan_fiscal: 'macro', dette: 'macro', taux: 'macro', inflation: 'macro',
+  hausse_primes: 'macro', fnb: 'macro', liquidite: 'macro', assurabilite: 'macro',
+  stress_refi: 'macro', choc_confiance: 'macro', contagion: 'macro',
+  devaluation: 'macro', confiance: 'macro', reg_macroprud: 'macro',
+  fsouverains: 'macro', stablecoins: 'macro', reorg_monetaire: 'macro',
+  fragm_monetaire: 'macro', fmi_bri: 'macro', pol_mon_nc: 'macro', cbdc: 'macro',
+  // Géopolitique & chaînes
+  frag_geo: 'geo', sanctions: 'geo', chaines: 'geo', energie: 'geo', conflits_normes: 'geo',
+  // Chine
+  chine: 'chine', ch_dette_immo: 'chine', ch_pol_ind: 'chine', ch_yuan: 'chine',
+  // Émergents
+  em_dettes: 'emergents', em_sudden_stop: 'emergents', em_dependance: 'emergents',
+  // Gouvernance numérique
+  gn_gouvernance: 'gouvnum', gn_ia: 'gouvnum', gn_cloud: 'gouvnum', gn_pi: 'gouvnum',
+  // Social & politique
+  instab_regles: 'social', instab_pol: 'social', erosion_reg: 'social',
+  perte_lisibilite: 'social', frustration_distrib: 'social',
+  fatigue_sociale: 'social', austerite: 'social',
+  // Économie réelle
+  productivite: 'reelle', desorg: 'reelle', compression_inv: 'reelle',
+  compression_marges: 'reelle', rarete_main_oeuvre: 'reelle',
+  marche_travail: 'reelle', innovation: 'reelle',
+  // Risques structurels
+  demo: 'structurel', climat: 'structurel', cyber: 'structurel',
+  concentration: 'structurel', infra: 'structurel',
+};
+
+// ============================================================
+// EDGES
+// ============================================================
+const edges = [
+  // === FRAGMENTATION GÉOPOLITIQUE ===
+  { source: 'frag_geo', target: 'sanctions', type: 'default', w: 3,
+    justif: 'Mécanisme quasi-mécanique : toute fragmentation géopolitique majeure se traduit par des sanctions (Russie 2022, Iran, SWIFT). Corrélation historique très élevée, délai court.' },
+  { source: 'frag_geo', target: 'chaines', type: 'default', w: 3,
+    justif: 'Lien documenté : les relocalisations et disruptions logistiques sont des conséquences directes et mesurables de la fragmentation (reshoring +40% post-2020, Fed de NY).' },
+  { source: 'frag_geo', target: 'conflits_normes', type: 'default', w: 2,
+    justif: 'Probabiliste : la fragmentation crée des pressions normatives, mais le délai et l\'intensité varient selon les secteurs et les coalitions géopolitiques.' },
+  { source: 'frag_geo', target: 'reorg_monetaire', type: 'negative', w: 2,
+    justif: 'Causalité graduelle : la fragmentation pousse à la dédollarisation, mais le processus est lent (part du dollar dans les réserves : -10pp en 20 ans seulement).' },
+  { source: 'sanctions', target: 'energie', type: 'default', w: 3,
+    justif: 'Quasi-mécanique : les sanctions sur les exportateurs d\'énergie perturbent directement les flux (embargo UE → +80% prix gaz 2022). Élasticité élevée, délai inférieur à 6 mois.' },
+  { source: 'sanctions', target: 'chaines', type: 'default', w: 2,
+    justif: 'Modéré : les sanctions fragmentent certaines chaînes (semi-conducteurs, acier), mais des contournements partiels (via tiers) limitent l\'impact immédiat.' },
+  { source: 'chaines', target: 'inflation', type: 'default', w: 3,
+    justif: 'Élasticité forte documentée : les perturbations logistiques ont contribué à ~30% de l\'excès d\'inflation 2021-2023 selon Fed de NY. Transmission rapide (3-6 mois).' },
+  { source: 'chaines', target: 'desorg', type: 'default', w: 2,
+    justif: 'Modéré : les disruptions désorganisent la production, mais les entreprises s\'adaptent via dual-sourcing et stocks tampon sur 12-18 mois.' },
+  { source: 'energie', target: 'inflation', type: 'default', w: 3,
+    justif: 'Quasi-mécanique : l\'énergie représente 15-20% du panier CPI. Élasticité prix-CPI estimée à 0.3-0.5 selon BCE et FMI. Transmission en 1-3 mois.' },
+  { source: 'energie', target: 'compression_marges', type: 'default', w: 2,
+    justif: 'Modéré : impacte fortement les industries énergivores (chimie, acier, ciment), mais variable selon secteur et capacité de répercussion des coûts.' },
+  { source: 'conflits_normes', target: 'desorg', type: 'default', w: 2,
+    justif: 'Causalité modérée : la fragmentation normative alourdit les coûts de conformité et perturbe les standards, mais l\'effet sur la production est indirect et graduel.' },
+  { source: 'demo', target: 'bilan_fiscal', type: 'default', w: 3,
+    justif: 'Quasi-mécanique : chaque point de hausse du ratio de dépendance → ~0.5-1pp de PIB de dépenses sociales (projections OCDE 2023). Mécanique comptable quasi-déterministe à long terme.' },
+  { source: 'demo', target: 'rarete_main_oeuvre', type: 'default', w: 3,
+    justif: 'Lien direct et documenté : vieillissement → contraction de la population active. Corrélation très forte dans tous les pays OCDE (R² > 0.85 sur 20 ans).' },
+  { source: 'demo', target: 'marche_travail', type: 'stabilizer', w: 2,
+    justif: 'Modéré : la démographie structure le marché du travail sur le long terme, mais les flux migratoires et les taux d\'activité des seniors introduisent une variabilité significative.' },
+  { source: 'marche_travail', target: 'demo', type: 'stabilizer', w: 1,
+    justif: 'Rétroaction faible : l\'emploi influence la fécondité et l\'immigration à très long terme. Délai de 10-20 ans, élasticité très limitée.' },
+  { source: 'climat', target: 'assurabilite', type: 'default', w: 3,
+    justif: 'Quasi-mécanique : augmentation des sinistres climatiques → hausse des primes → retrait des assureurs. Documenté : 8+ assureurs majeurs quittent la Floride et la Californie (2023-2024).' },
+  { source: 'climat', target: 'bilan_fiscal', type: 'default', w: 2,
+    justif: 'Modéré : dépenses d\'adaptation publiques estimées à 0.5-3% PIB/an selon FMI, mais le calendrier et la répartition politique restent très incertains.' },
+  { source: 'climat', target: 'desorg', type: 'default', w: 2,
+    justif: 'Probabiliste : événements extrêmes perturbent la production et les chaînes logistiques. L\'impact dépend de la localisation géographique et du niveau de préparation.' },
+  { source: 'climat', target: 'inflation', type: 'default', w: 2,
+    justif: '"Greenflation" (coûts de transition) + "climateflation" (chocs physiques sur l\'agriculture) documentées. Ampleur variable selon trajectoire de transition choisie.' },
+  { source: 'cyber', target: 'infra', type: 'negative', w: 3,
+    justif: 'Lien physique documenté : Stuxnet → centrifugeuses iraniennes, Colonial Pipeline → pénuries physiques. Le cyber peut produire des destructions matérielles réelles. Élasticité très forte.' },
+  { source: 'cyber', target: 'liquidite', type: 'negative', w: 2,
+    justif: 'Modéré : une attaque sur systèmes de paiement pourrait bloquer la liquidité interbancaire, mais les plans de continuité bancaire limitent l\'impact dans les économies avancées.' },
+  { source: 'cyber', target: 'instab_pol', type: 'default', w: 1,
+    justif: 'Faible et indirect : les cyberattaques peuvent déstabiliser politiquement, mais l\'effet direct nécessite des conditions préalables (faible résilience institutionnelle).' },
+  { source: 'cyber', target: 'desorg', type: 'negative', w: 2,
+    justif: 'Modéré : perturbation de la production documentée (Colonial Pipeline 2021), mais résilience variable selon secteur et redondance des systèmes.' },
+  { source: 'concentration', target: 'desorg', type: 'default', w: 2,
+    justif: 'Modéré : la concentration peut désorganiser via les décisions de quelques acteurs dominants, mais peut aussi rationaliser la production. Effet ambigu.' },
+  { source: 'concentration', target: 'fatigue_sociale', type: 'default', w: 2,
+    justif: 'Probabiliste : concentration des gains de productivité → inégalités → fatigue sociale. Corrélation empirique mais délai long (5-10 ans).' },
+  { source: 'concentration', target: 'infra', type: 'default', w: 1,
+    justif: 'Faible : la concentration technologique crée des dépendances d\'infrastructure (hyperscalers), mais l\'effet reste conditionnel à des décisions de politique industrielle.' },
+  { source: 'infra', target: 'liquidite', type: 'default', w: 2,
+    justif: 'Modéré : les infrastructures de paiement sont critiques pour la liquidité, mais les systèmes de backup limitent les cascades dans les pays avancés.' },
+  { source: 'infra', target: 'desorg', type: 'default', w: 2,
+    justif: 'Modéré : dégradation des infrastructures → perturbations productives. Mécanisme documenté mais délai d\'effet variable selon l\'intensité du choc.' },
+  { source: 'bilan_fiscal', target: 'dette', type: 'default', w: 3,
+    justif: 'Quasi-mécanique (identité comptable) : déficit fiscal = accroissement de la dette. Élasticité = 1 par définition. Seul le financement varie.' },
+  { source: 'dette', target: 'taux', type: 'default', w: 3,
+    justif: 'Quasi-mécanique sous stress : spread souverain = f(ratio dette/PIB, croissance, crédibilité BC). BTP italiens : corrélation dette/spread très forte sur 2010-2023 (R² ≈ 0.78).' },
+  { source: 'dette', target: 'stress_refi', type: 'negative', w: 3,
+    justif: 'Lien fort : une dette élevée signifie des volumes de refinancement importants — sensibilité maximale aux conditions de marché. Documenté lors de chaque épisode de stress souverain.' },
+  { source: 'dette', target: 'austerite', type: 'default', w: 2,
+    justif: 'Probabiliste : la pression de la dette pousse à l\'austérité, mais le choix politique reste discrétionnaire (monétisation ou répression financière sont des alternatives).' },
+  { source: 'taux', target: 'hausse_primes', type: 'default', w: 3,
+    justif: 'Quasi-mécanique : taux sans risque + prime de terme + spread crédit = coût du capital. Hausse du taux sans risque se transmet mécaniquement. Corrélation quasi-parfaite.' },
+  { source: 'taux', target: 'compression_inv', type: 'negative', w: 3,
+    justif: 'Élasticité forte documentée : investissement privé/PIB corrélé négativement aux taux réels (–0.5 à –0.8 selon FMI/NBER). Mécanisme de base de la politique monétaire.' },
+  { source: 'taux', target: 'devaluation', type: 'negative', w: 3,
+    justif: 'Quasi-mécanique (modèle DCF) : valeur actuelle = Σ(flux / (1+r)^t). Chaque +100bp → dévaluation de duration×100bp sur les actifs longs. Mécanique de valorisation pure.' },
+  { source: 'inflation', target: 'taux', type: 'default', w: 3,
+    justif: 'Quasi-mécanique (règle de Taylor) : les banques centrales montent les taux en réponse à l\'inflation. Corrélation très forte depuis 1970 dans les économies avancées (BCE, Fed, BoE).' },
+  { source: 'inflation', target: 'hausse_primes', type: 'default', w: 2,
+    justif: 'Modéré : l\'inflation érode les rendements réels et augmente l\'incertitude, ce qui comprime les primes — mais l\'effet dépend de l\'ancrage des anticipations d\'inflation.' },
+  { source: 'hausse_primes', target: 'compression_inv', type: 'negative', w: 2,
+    justif: 'Modéré : les primes élevées renchérissent le financement externe, mais les grandes entreprises peuvent se substituer au marché via l\'autofinancement.' },
+  { source: 'hausse_primes', target: 'devaluation', type: 'negative', w: 2,
+    justif: 'Modéré : la hausse des primes comprime les valorisations, mais l\'ampleur dépend de la duration des actifs et de la qualité de crédit des émetteurs.' },
+  { source: 'fnb', target: 'contagion', type: 'default', w: 3,
+    justif: 'Fort : l\'opacité et l\'interconnexion de la FNB rendent la contagion difficile à contenir. Documenté : LTCM 1998, gilts UK 2022 (LDI funds), money market funds 2008.' },
+  { source: 'fnb', target: 'stress_refi', type: 'default', w: 2,
+    justif: 'Modéré : le private credit peut amplifier les besoins de refinancement en période de stress via les appels de marge et le deleveraging, mais moins systémique que le bancaire.' },
+  { source: 'fnb', target: 'liquidite', type: 'default', w: 2,
+    justif: 'Modéré : la FNB crée des risques de liquidité (transformation de maturité hors bilan), mais les interconnexions précises restent largement opaques.' },
+  { source: 'liquidite', target: 'stress_refi', type: 'default', w: 3,
+    justif: 'Quasi-mécanique : tension sur la liquidité = hausse immédiate du coût de refinancement à court terme. Documenté : LIBOR-OIS spread 2008, repo stress Sep 2019.' },
+  { source: 'liquidite', target: 'confiance', type: 'negative', w: 2,
+    justif: 'Modéré : la tension de liquidité érode la confiance, mais la banque centrale peut intervenir rapidement (swap lines, repo facilities). Effet atténué si réaction rapide.' },
+  { source: 'assurabilite', target: 'compression_inv', type: 'negative', w: 2,
+    justif: 'Modéré : le retrait de l\'assurabilité comprime l\'investissement immobilier et industriel dans les zones à risque. Documenté aux USA (FEMA, NFIP en déficit chronique).' },
+  { source: 'assurabilite', target: 'hausse_primes', type: 'default', w: 1,
+    justif: 'Faible et indirect : la dégradation de l\'assurabilité peut contribuer aux primes de risque sur les actifs concernés, mais l\'effet systémique reste limité et localisé.' },
+  { source: 'contagion', target: 'liquidite', type: 'default', w: 3,
+    justif: 'Fort : les mécanismes de contagion se transmettent via les marchés de liquidité (sell-off en cascade, appels de marge). Documenté dans toutes les crises financières majeures.' },
+  { source: 'stress_refi', target: 'choc_confiance', type: 'negative', w: 3,
+    justif: 'Quasi-mécanique en crise : le stress de refinancement visible se traduit mécaniquement en signal de défiance (défaut Lehman, crise grecque 2010). Auto-réalisation des anticipations.' },
+  { source: 'desorg', target: 'productivite', type: 'negative', w: 3,
+    justif: 'Fort : la désorganisation productive réduit directement la productivité totale des facteurs (PTF). Documenté lors de toutes les disruptions logistiques majeures (–1 à –3pp de PTF).' },
+  { source: 'compression_inv', target: 'productivite', type: 'negative', w: 3,
+    justif: 'Fort : l\'investissement est le moteur de la productivité à long terme (capital, R&D, technologie). Élasticité investissement→PTF bien documentée (+1% inv → +0.3% PTF selon OCDE).' },
+  { source: 'productivite', target: 'dette', type: 'negative', w: 2,
+    justif: 'Modéré : la productivité améliore les recettes fiscales et réduit la pression sur la dette/PIB, mais l\'effet se manifeste sur 3-5 ans (délai de transmission fiscal).' },
+  { source: 'productivite', target: 'confiance', type: 'stabilizer', w: 2,
+    justif: 'Modéré : la croissance de la productivité renforce la crédibilité macroéconomique, mais la confiance répond plus immédiatement aux signaux financiers qu\'à la PTF.' },
+  { source: 'compression_marges', target: 'frustration_distrib', type: 'default', w: 2,
+    justif: 'Modéré : compression des marges → pression salariale et/ou pertes d\'emplois → frustration. Délai et intensité varient selon la structure du marché du travail.' },
+  { source: 'frustration_distrib', target: 'instab_pol', type: 'default', w: 3,
+    justif: 'Fort : corrélation empirique solide. L\'inégalité perçue et la compression des revenus réels sont les meilleurs prédicteurs des ruptures politiques (Brexit, Trump 2016, Gilets jaunes).' },
+  { source: 'rarete_main_oeuvre', target: 'inflation', type: 'default', w: 2,
+    justif: 'Modéré : pénurie de main-d\'œuvre → inflation salariale → inflation par les coûts. Élasticité modérée (courbe de Phillips aplatie depuis 1990, mais non nulle).' },
+  { source: 'rarete_main_oeuvre', target: 'desorg', type: 'default', w: 2,
+    justif: 'Modéré : la pénurie de travailleurs désorganise certains secteurs (transport, santé, construction) mais l\'automatisation et la migration peuvent compenser partiellement.' },
+  { source: 'austerite', target: 'frustration_distrib', type: 'default', w: 3,
+    justif: 'Fort : l\'austérité comprime les transferts sociaux et génère une frustration distributive mesurable. Documenté : Grèce 2010-15, Argentine 2018-19, UK post-2010 (–25% services publics).' },
+  { source: 'austerite', target: 'desorg', type: 'default', w: 2,
+    justif: 'Modéré : l\'austérité réduit les investissements publics et peut désorganiser les services essentiels, mais l\'ampleur dépend des secteurs ciblés et de la vitesse d\'ajustement.' },
+  { source: 'stablecoins', target: 'reorg_monetaire', type: 'negative', w: 2,
+    justif: 'Modéré : les stablecoins perturbent le monopole monétaire des banques centrales, mais leur adoption reste limitée aux marchés des actifs numériques (~$160Mds de capitalisation en 2024).' },
+  { source: 'stablecoins', target: 'instab_regles', type: 'default', w: 2,
+    justif: 'Modéré : la croissance des stablecoins force une réponse réglementaire (MiCA EU, loi US en cours), créant de l\'incertitude pour les émetteurs et les utilisateurs.' },
+  { source: 'reorg_monetaire', target: 'fragm_monetaire', type: 'default', w: 2,
+    justif: 'Causalité modérée : la réorganisation du système monétaire international alimente la fragmentation, mais le processus est graduel (dollar représente encore 58% des réserves mondiales).' },
+  { source: 'reorg_monetaire', target: 'confiance', type: 'negative', w: 2,
+    justif: 'Modéré : l\'incertitude sur l\'ordre monétaire érode la confiance dans les institutions, mais l\'effet est diffus et nécessite 5-10 ans pour se matérialiser pleinement.' },
+  { source: 'instab_regles', target: 'compression_inv', type: 'negative', w: 2,
+    justif: 'Modéré : l\'incertitude réglementaire réduit l\'investissement de long terme. Empiriquement documenté mais difficile à isoler des autres facteurs d\'incertitude.' },
+  { source: 'fragm_monetaire', target: 'confiance', type: 'negative', w: 2,
+    justif: 'Modéré : la fragmentation monétaire érode la confiance dans le système international mais ne détruit pas la confiance locale dans les économies avancées dotées d\'institutions solides.' },
+  { source: 'fragm_monetaire', target: 'hausse_primes', type: 'default', w: 2,
+    justif: 'Modéré : la fragmentation augmente les coûts de couverture de change et les primes de risque sur les actifs transfrontaliers, notamment pour les émetteurs en devises secondaires.' },
+  { source: 'instab_pol', target: 'erosion_reg', type: 'default', w: 2,
+    justif: 'Probabiliste : l\'instabilité politique peut mener à un relâchement réglementaire (capture réglementaire, démagogie), mais ce n\'est pas systématique selon la qualité institutionnelle.' },
+  { source: 'instab_pol', target: 'perte_lisibilite', type: 'default', w: 2,
+    justif: 'Modéré : l\'instabilité politique rend le système moins lisible pour les agents économiques, mais l\'effet varie fortement selon la qualité des institutions existantes.' },
+  { source: 'instab_pol', target: 'confiance', type: 'negative', w: 3,
+    justif: 'Fort : l\'instabilité politique est l\'un des premiers déterminants de la défiance institutionnelle et monétaire. Corrélation forte dans les études empiriques (WGI, Polity IV).' },
+  { source: 'instab_pol', target: 'choc_confiance', type: 'default', w: 2,
+    justif: 'Modéré : l\'instabilité politique peut déclencher un choc de confiance ponctuel, mais nécessite souvent un événement déclencheur spécifique pour cristalliser.' },
+  { source: 'erosion_reg', target: 'confiance', type: 'negative', w: 2,
+    justif: 'Modéré : l\'érosion réglementaire signale la capture du système — ce qui alimente la défiance, mais l\'effet se matérialise lentement sur des horizons de 5-15 ans.' },
+  { source: 'erosion_reg', target: 'instab_pol', type: 'negative', w: 2,
+    justif: 'Rétroaction modérée : l\'érosion réglementaire amplifie les inégalités et la frustration, alimentant à son tour l\'instabilité politique (boucle de fragilisation).' },
+  { source: 'perte_lisibilite', target: 'confiance', type: 'negative', w: 2,
+    justif: 'Modéré : un système illisible est un système dont on ne peut anticiper le comportement — ce qui érode la confiance des agents économiques et des investisseurs.' },
+  { source: 'fatigue_sociale', target: 'instab_pol', type: 'default', w: 2,
+    justif: 'Modéré : la fatigue sociale crée les conditions de l\'instabilité politique, mais le délai de transformation est long (5-10 ans) et dépend des institutions politiques.' },
+  { source: 'choc_confiance', target: 'confiance', type: 'negative', w: 3,
+    justif: 'Quasi-mécanique : par définition, un choc de confiance détruit la confiance. Mécanisme d\'auto-réalisation des anticipations (bank run, attaque spéculative). Délai : heures à jours.' },
+  { source: 'choc_confiance', target: 'liquidite', type: 'negative', w: 3,
+    justif: 'Quasi-mécanique : un choc de confiance déclenche immédiatement un assèchement de liquidité (flight to quality, appels de marge en cascade). Documenté en 2008, 2011, 2020.' },
+  { source: 'devaluation', target: 'confiance', type: 'negative', w: 2,
+    justif: 'Modéré : la dévaluation des actifs érode la richesse des ménages et des banques — ce qui peut alimenter la défiance, mais l\'effet dépend de la distribution des actifs.' },
+  { source: 'fmi_bri', target: 'liquidite', type: 'stabilizer', w: 2,
+    justif: 'Modéré : les swap lines et facilités FMI injectent de la liquidité en devises fortes, mais leur activation nécessite des conditions politiques et prend 2-6 semaines.' },
+  { source: 'fmi_bri', target: 'dette', type: 'stabilizer', w: 2,
+    justif: 'Modéré : les programmes FMI restructurent et soulagent la dette souveraine, mais les conditions d\'austérité associées peuvent partiellement annuler l\'effet stabilisant.' },
+  { source: 'fmi_bri', target: 'confiance', type: 'stabilizer', w: 2,
+    justif: 'Modéré : l\'engagement du FMI est un signal de solidité institutionnelle — mais peut aussi signaler la gravité du problème ("effet stigmate" : Draghi 2012 vs Grèce 2010).' },
+  { source: 'fmi_bri', target: 'stress_refi', type: 'stabilizer', w: 2,
+    justif: 'Modéré : les facilités FMI/BRI soulagent le stress de refinancement, mais uniquement pour les pays éligibles, avec des délais de mise en œuvre significatifs.' },
+  { source: 'pol_mon_nc', target: 'liquidite', type: 'stabilizer', w: 3,
+    justif: 'Quasi-mécanique : le QE injecte directement de la liquidité dans les marchés. Fed QE1 (2008) : +$1 200Mds de réserves en 3 mois. Mécanisme de transmission quasi-direct.' },
+  { source: 'pol_mon_nc', target: 'taux', type: 'stabilizer', w: 3,
+    justif: 'Quasi-mécanique : la politique monétaire contrôle directement les taux courts et influence les taux longs via la courbe (forward guidance, QE/QT sur duration).' },
+  { source: 'pol_mon_nc', target: 'compression_inv', type: 'stabilizer', w: 2,
+    justif: 'Modéré : le QE allège le coût du capital et réduit la compression des investissements, mais l\'effet est plus fort sur les actifs financiers que sur l\'investissement productif réel.' },
+  { source: 'pol_mon_nc', target: 'confiance', type: 'stabilizer', w: 2,
+    justif: 'Modéré : le "whatever it takes" a restauré la confiance en 2012. Mais l\'effet stabilisant peut s\'émousser si répété sans ancrage fiscal crédible.' },
+  { source: 'marche_travail', target: 'instab_pol', type: 'stabilizer', w: 2,
+    justif: 'Modéré : le plein emploi est un amortisseur politique documenté. Chômage structurel élevé = prédicteur d\'instabilité (corrélation forte en période de crise, FMI 2015).' },
+  { source: 'marche_travail', target: 'inflation', type: 'default', w: 2,
+    justif: 'Modéré : tensions salariales → inflation par les coûts. Courbe de Phillips aplatie depuis 1990 — élasticité réduite mais non nulle (réactivation post-Covid bien documentée).' },
+  { source: 'marche_travail', target: 'productivite', type: 'stabilizer', w: 2,
+    justif: 'Modéré : le plein emploi soutient la productivité via la demande et l\'allocation du capital humain, mais l\'effet est indirect et dépend de la qualité des emplois créés.' },
+  { source: 'marche_travail', target: 'frustration_distrib', type: 'stabilizer', w: 2,
+    justif: 'Modéré : l\'emploi et les salaires réels sont les premiers déterminants de la frustration distributive — lien empirique fort mais médiatisé par les inégalités de patrimoine.' },
+  { source: 'innovation', target: 'productivite', type: 'stabilizer', w: 2,
+    justif: 'Modéré : l\'innovation technologique soutient la productivité, mais les délais de diffusion sont longs (5-20 ans selon Brynjolfsson et al., 2021 sur l\'IA).' },
+  { source: 'innovation', target: 'compression_marges', type: 'stabilizer', w: 1,
+    justif: 'Faible à moyen terme : l\'innovation peut réduire les coûts, mais les effets sur la compression des marges dépendent de la structure concurrentielle et de la vitesse d\'adoption.' },
+  { source: 'innovation', target: 'desorg', type: 'stabilizer', w: 1,
+    justif: 'Faible : l\'innovation peut paradoxalement désorganiser la production (disruption) avant de la réorganiser. Effet ambivalent à court terme, positif à long terme.' },
+  { source: 'reg_macroprud', target: 'fnb', type: 'stabilizer', w: 2,
+    justif: 'Modéré : la régulation macroprudentielle peut encadrer la FNB (AIFMD, Bâle III), mais l\'arbitrage réglementaire et la vitesse d\'innovation financière limitent son efficacité.' },
+  { source: 'reg_macroprud', target: 'liquidite', type: 'stabilizer', w: 1,
+    justif: 'Faible : les coussins de liquidité réglementaires (LCR, NSFR) limitent les chocs de liquidité, mais l\'effet est surtout préventif et non curatif en situation de crise aiguë.' },
+  { source: 'reg_macroprud', target: 'contagion', type: 'stabilizer', w: 2,
+    justif: 'Modéré : les stress tests et limites de levier réduisent la probabilité de contagion systémique, mais ne l\'éliminent pas (corrélations cachées, risques de queue).' },
+  { source: 'fsouverains', target: 'liquidite', type: 'stabilizer', w: 2,
+    justif: 'Modéré : les SWF sont des acheteurs contra-cycliques documentés — ADIA, GIC ont fourni de la liquidité lors de la crise 2008 (recapitalisations Citigroup, Merrill Lynch).' },
+  { source: 'fsouverains', target: 'devaluation', type: 'stabilizer', w: 2,
+    justif: 'Modéré : les SWF soutiennent les valorisations en achetant des actifs dépréciés, mais leur capacité d\'absorption reste limitée face à des chocs systémiques larges.' },
+  { source: 'fsouverains', target: 'compression_inv', type: 'stabilizer', w: 1,
+    justif: 'Faible : les SWF peuvent soutenir l\'investissement à long terme, mais leur impact sur la compression à court terme reste marginal (délais de décision longs).' },
+  { source: 'cbdc', target: 'reorg_monetaire', type: 'stabilizer', w: 1,
+    justif: 'Faible à ce stade : les CBDC pourraient stabiliser la réorganisation monétaire, mais leur déploiement à grande échelle reste limité (yuan numérique hors Chine : marginal en 2024).' },
+  { source: 'cbdc', target: 'fragm_monetaire', type: 'stabilizer', w: 1,
+    justif: 'Faible : les CBDC souveraines pourraient réduire la fragmentation monétaire, mais nécessitent une interopérabilité internationale qui n\'existe pas encore.' },
+  { source: 'cbdc', target: 'confiance', type: 'stabilizer', w: 1,
+    justif: 'Faible à ce stade : le potentiel stabilisateur des CBDC sur la confiance est reconnu mais non matérialisé à l\'échelle macroéconomique. Horizon : 5-10 ans.' },
+  { source: 'chine', target: 'frag_geo', type: 'geo', w: 3,
+    justif: 'Fort : la Chine est le principal vecteur de fragmentation géopolitique via la rivalité sino-américaine. Moteur structurel de la bifurcation technologique et commerciale mondiale.' },
+  { source: 'chine', target: 'sanctions', type: 'geo', w: 3,
+    justif: 'Fort : la Chine est à la fois source (Taiwan, Xinjiang) et cible (restrictions semi-conducteurs CHIPS Act) des sanctions — acteur central du régime de sanctions contemporain.' },
+  { source: 'chine', target: 'chaines', type: 'geo', w: 3,
+    justif: 'Fort : la Chine représente ~14% du commerce mondial. Toute disruption des chaînes chinoises se propage immédiatement à l\'économie mondiale (lockdowns 2022 → +2pp d\'inflation OCDE).' },
+  { source: 'chine', target: 'energie', type: 'geo', w: 2,
+    justif: 'Modéré : la demande chinoise d\'énergie et de métaux pèse fortement sur les prix, mais l\'effet direct dépend de la conjoncture de croissance chinoise du moment.' },
+  { source: 'chine', target: 'reorg_monetaire', type: 'geo', w: 2,
+    justif: 'Modéré : la Chine pousse activement à la dédollarisation (e-CNY, CIPS), mais le yuan reste une monnaie de réserve marginale (<3% des réserves mondiales en 2024).' },
+  { source: 'chine', target: 'ch_dette_immo', type: 'geo', w: 3,
+    justif: 'Quasi-mécanique : la crise immobilière chinoise est un fait structurel documenté (Evergrande → $300Mds, Country Garden). Chaîne dette locale → immobilier bien identifiée.' },
+  { source: 'chine', target: 'ch_pol_ind', type: 'geo', w: 3,
+    justif: 'Quasi-mécanique : la politique industrielle chinoise est explicite et massivement subventionnée (Made in China 2025, subsidies VE estimés à $57Mds en 2022).' },
+  { source: 'chine', target: 'ch_yuan', type: 'geo', w: 2,
+    justif: 'Modéré : le développement du yuan numérique est une priorité politique déclarée, mais son adoption internationale reste très limitée et principalement bilatérale.' },
+  { source: 'ch_dette_immo', target: 'liquidite', type: 'geo', w: 2,
+    justif: 'Modéré : une crystallisation de la crise immobilière pourrait assécher la liquidité mondiale via la vente d\'actifs offshore et la réduction des importations chinoises.' },
+  { source: 'ch_dette_immo', target: 'confiance', type: 'geo', w: 2,
+    justif: 'Modéré : une crise immobilière majeure en Chine éroderait la confiance globale, mais l\'effet dépend fortement de la réponse des autorités chinoises (PBOC, NDRC).' },
+  { source: 'ch_dette_immo', target: 'devaluation', type: 'geo', w: 2,
+    justif: 'Modéré : pression sur les actifs chinois et les marchés émergents liés, mais la compartimentation du marché financier chinois limite la contagion directe.' },
+  { source: 'ch_pol_ind', target: 'conflits_normes', type: 'geo', w: 2,
+    justif: 'Modéré : la politique industrielle chinoise crée des distorsions qui alimentent les conflits commerciaux et normatifs (WTO disputes, anti-dumping VE EU 2024).' },
+  { source: 'ch_pol_ind', target: 'desorg', type: 'geo', w: 2,
+    justif: 'Modéré : la surproduction subventionnée désorganise les marchés industriels mondiaux (acier 2015-2016, VE aujourd\'hui avec -40% prix en EU vs prix chinois).' },
+  { source: 'ch_pol_ind', target: 'compression_marges', type: 'geo', w: 2,
+    justif: 'Modéré : la concurrence des exportations subventionnées chinoises comprime les marges industrielles européennes et américaines (acier, panneaux solaires, batteries).' },
+  { source: 'ch_yuan', target: 'reorg_monetaire', type: 'geo', w: 2,
+    justif: 'Modéré : le yuan numérique et le CIPS accélèrent la réorganisation monétaire, mais restent des alternatives marginales à l\'architecture dollar dominante.' },
+  { source: 'ch_yuan', target: 'fragm_monetaire', type: 'geo', w: 2,
+    justif: 'Modéré : le développement d\'un bloc yuan (accords bilatéraux ASEAN, Russie, Moyen-Orient) contribue à la fragmentation monétaire globale.' },
+  { source: 'ch_yuan', target: 'sanctions', type: 'geo', w: 1,
+    justif: 'Faible : le yuan offre une alternative partielle aux sanctions (contournement partiel du SWIFT), mais la portée reste limitée par l\'inconvertibilité du yuan.' },
+  { source: 'em_dettes', target: 'liquidite', type: 'geo', w: 2,
+    justif: 'Modéré : les crises EM peuvent assécher la liquidité mondiale via le flight-to-quality et la vente d\'actifs par les gérants globaux (fonds EM réallouant vers sécurité).' },
+  { source: 'em_dettes', target: 'stress_refi', type: 'geo', w: 3,
+    justif: 'Fort : les pays EM à forte dette externe sont extrêmement sensibles aux conditions de refinancement. Le mécanisme "sudden stop" est bien documenté (Calvo 1998).' },
+  { source: 'em_dettes', target: 'instab_pol', type: 'geo', w: 2,
+    justif: 'Modéré : la pression de la dette externe génère des ajustements douloureux qui alimentent l\'instabilité politique (Argentine 2018-19, Sri Lanka 2022).' },
+  { source: 'liquidite', target: 'em_dettes', type: 'geo', w: 3,
+    justif: 'Quasi-mécanique : la contraction de la liquidité mondiale (dollar fort) se transmet directement aux EM endettés en devises étrangères via l\'appréciation du dollar.' },
+  { source: 'taux', target: 'em_dettes', type: 'geo', w: 3,
+    justif: 'Quasi-mécanique : la hausse des taux US apprécie le dollar et alourdit mécaniquement le service de la dette externe des EM. "Original sin" bien documenté (Eichengreen et al.).' },
+  { source: 'em_dettes', target: 'em_sudden_stop', type: 'geo', w: 3,
+    justif: 'Quasi-mécanique : la pression sur la dette externe EM déclenche mécaniquement le risque de "sudden stop". Corrélation historique très forte (Calvo 1998, FMI 2021).' },
+  { source: 'em_dettes', target: 'em_dependance', type: 'geo', w: 2,
+    justif: 'Modéré : les pays EM à forte dépendance aux matières premières cumulent les vulnérabilités, mais ce n\'est pas systématique pour tous les pays EM.' },
+  { source: 'em_sudden_stop', target: 'instab_pol', type: 'geo', w: 3,
+    justif: 'Fort : les crises de balance des paiements EM se transforment quasi-systématiquement en crises politiques (Mexique 1994, Asie 1997, Argentine 2001, Sri Lanka 2022, Ghana 2022).' },
+  { source: 'em_sudden_stop', target: 'confiance', type: 'geo', w: 2,
+    justif: 'Modéré : les crises EM peuvent éroder la confiance dans la gouvernance mondiale, mais l\'effet sur la confiance dans les économies avancées reste limité et indirect.' },
+  { source: 'em_sudden_stop', target: 'fragm_monetaire', type: 'geo', w: 2,
+    justif: 'Modéré : les crises EM poussent les pays affectés à diversifier leurs réserves et systèmes de règlement — contribution graduelle à la fragmentation monétaire.' },
+  { source: 'em_dependance', target: 'energie', type: 'geo', w: 2,
+    justif: 'Modéré : la dépendance des EM aux matières premières les rend vulnérables aux chocs d\'énergie, mais certains sont exportateurs (Nigeria, Arabie Saoudite) — effet bidirectionnel.' },
+  { source: 'em_dependance', target: 'compression_marges', type: 'geo', w: 2,
+    justif: 'Modéré : les chocs des termes de l\'échange compriment les revenus des pays exportateurs de matières premières — effet documenté sur les marges et la solvabilité.' },
+  { source: 'em_dependance', target: 'chaines', type: 'geo', w: 2,
+    justif: 'Modéré : la monoculture économique des EM crée des goulots d\'étranglement dans les chaînes d\'approvisionnement (cuivre Congo, cobalt, lithium Amérique latine).' },
+  { source: 'fmi_bri', target: 'em_sudden_stop', type: 'stabilizer', w: 2,
+    justif: 'Modéré : le FMI peut atténuer les "sudden stops" via ses programmes (FCL, SBA), mais les conditions d\'austérité et les délais de mise en œuvre limitent l\'efficacité.' },
+  { source: 'gn_gouvernance', target: 'concentration', type: 'geo', w: 2,
+    justif: 'Modéré : la fragmentation de la gouvernance numérique favorise la concentration autour de quelques acteurs dominants dans chaque bloc géopolitique.' },
+  { source: 'gn_gouvernance', target: 'conflits_normes', type: 'geo', w: 2,
+    justif: 'Modéré : la divergence des standards numériques génère des conflits normatifs, mais l\'effet sur l\'économie réelle reste indirect à court terme.' },
+  { source: 'gn_gouvernance', target: 'frag_geo', type: 'geo', w: 2,
+    justif: 'Modéré : la gouvernance des communs numériques amplifie la fragmentation géopolitique — causalité bidirectionnelle, se renforçant mutuellement.' },
+  { source: 'gn_gouvernance', target: 'gn_ia', type: 'geo', w: 2,
+    justif: 'Causalité directe : la gouvernance numérique détermine les règles du jeu de la régulation IA — lien structurel avec effets graduels.' },
+  { source: 'gn_gouvernance', target: 'gn_cloud', type: 'geo', w: 2,
+    justif: 'Causalité directe : la fragmentation de la gouvernance favorise la multiplication des clouds souverains — lien structurel documenté.' },
+  { source: 'gn_gouvernance', target: 'gn_pi', type: 'geo', w: 2,
+    justif: 'Causalité directe : la fragmentation normative amplifie les conflits de propriété intellectuelle — lien structurel entre gouvernance et PI.' },
+  { source: 'gn_ia', target: 'productivite', type: 'geo', w: 2,
+    justif: 'Modéré : la fragmentation des standards IA réduit les gains de productivité potentiels en créant des coûts de conformité et en fragmentant les données d\'entraînement.' },
+  { source: 'gn_ia', target: 'concentration', type: 'geo', w: 2,
+    justif: 'Modéré : la fragmentation réglementaire favorise les acteurs pouvant se conformer à plusieurs régimes simultanément — renforce la concentration existante.' },
+  { source: 'gn_ia', target: 'conflits_normes', type: 'geo', w: 2,
+    justif: 'Modéré : trois régimes IA incompatibles (EU AI Act, approche US, régulation chinoise) alimentent directement les conflits de normes technologiques.' },
+  { source: 'gn_cloud', target: 'infra', type: 'geo', w: 2,
+    justif: 'Modéré : la multiplication des clouds souverains fragmente les infrastructures critiques et crée de nouveaux points de vulnérabilité aux interfaces.' },
+  { source: 'gn_cloud', target: 'cyber', type: 'geo', w: 2,
+    justif: 'Modéré : les points d\'interconnexion entre clouds fragmentés sont des surfaces d\'attaque élargies — documenté par les équipes de sécurité cloud (CISA, ENISA).' },
+  { source: 'gn_cloud', target: 'concentration', type: 'geo', w: 2,
+    justif: 'Modéré : 3 hyperscalers US contrôlent ~65% du marché mondial — point de concentration extrême dans les infrastructures numériques critiques.' },
+  { source: 'gn_pi', target: 'desorg', type: 'geo', w: 1,
+    justif: 'Faible à moyen terme : les "patent thickets" ralentissent l\'innovation et peuvent créer des goulots d\'étranglement dans la production technologique.' },
+  { source: 'gn_pi', target: 'compression_inv', type: 'geo', w: 1,
+    justif: 'Faible : les guerres de brevets alourdissent les coûts de R&D et peuvent comprimer l\'investissement dans les secteurs à haute intensité de PI.' },
+  { source: 'gn_pi', target: 'conflits_normes', type: 'geo', w: 2,
+    justif: 'Modéré : les brevets standards essentiels (SEP) sont un terrain de conflit normatif entre US, EU et Chine — documenté dans les télécoms (5G, OFDM).' },
+  { source: 'innovation', target: 'gn_ia', type: 'stabilizer', w: 1,
+    justif: 'Faible : l\'innovation technologique peut alléger la fragmentation des standards IA via l\'interopérabilité technique, mais l\'effet est conditionnel aux décisions politiques.' },
+  // === FERMETURE DES BOUCLES STABILISATRICES (ajouts pour fermer les cycles systémiques) ===
+  { source: 'confiance', target: 'compression_inv', type: 'stabilizer', w: 2,
+    justif: 'Modéré : la confiance restaurée desserre la compression de l\'investissement. Les agents anticipent moins de risque et déploient à nouveau le capital. Mécanisme clé du "dividende de la confiance".' },
+  { source: 'confiance', target: 'pol_mon_nc', type: 'stabilizer', w: 2,
+    justif: 'Rétroaction modérée : le retour de la confiance réduit le besoin d\'intervention monétaire non conventionnelle — les banques centrales peuvent amorcer un QT crédible. Signal documenté lors de la sortie de QE (Fed 2014, 2018).' },
+  { source: 'confiance', target: 'fmi_bri', type: 'stabilizer', w: 2,
+    justif: 'Rétroaction modérée : une confiance restaurée sur la classe EM réduit la pression sur les dispositifs du FMI/BRI — le filet de sécurité peut se retirer progressivement (boucle vertueuse Mexique post-1995).' },
+  { source: 'confiance', target: 'innovation', type: 'stabilizer', w: 2,
+    justif: 'Modéré : la confiance et la stabilité macroéconomique créent les conditions de financement long nécessaires à la R&D et à l\'innovation technologique (capital-risque, investissement public). Lien empirique avec cycles de confiance institutionnelle.' },
+];
+
+// ============================================================
+// BOUCLES DE RÉTROACTION — curation analytique
+// Basé sur la dynamique systémique : boucles vérifiées, fermées,
+// avec mécanisme explicite et pertinence analytique
+// ============================================================
+const loops = [
+  // ---------- AMPLIFICATRICES (vicieuses) ----------
+  {
+    id: 'loop-debt-spiral',
+    name: 'Spirale dette-productivité',
+    category: 'amp',
+    path: ['dette', 'taux', 'compression_inv', 'productivite'],
+    steps: [
+      "La dette souveraine élevée exerce une pression haussière sur les taux (prime de risque pays, crowding out)",
+      "Les taux plus élevés renchérissent le coût du capital et freinent l'investissement productif",
+      "La compression de l'investissement dégrade la croissance de la productivité réelle",
+      "La baisse de productivité fait mécaniquement monter le ratio dette/PIB — la boucle se referme"
+    ],
+    mechanism: "Boucle macro-financière classique. Une fois enclenchée, elle est structurellement auto-aggravante : chaque tour du cycle dégrade les trois marges de manœuvre (budgétaire, monétaire, réelle). Le seul frein endogène est l'atteinte d'une limite politique (austérité imposée) ou monétaire (monétisation).",
+    pivot: "Le pivot est la productivité : sans relance de celle-ci (innovation, réformes), la boucle ne peut pas être brisée par des mesures financières seules.",
+    timescale: "Horizon moyen (2-5 ans)",
+    historical: "Italie et Grèce post-2010, Argentine cyclique."
+  },
+  {
+    id: 'loop-liquidity',
+    name: 'Crise de liquidité auto-amplifiée',
+    category: 'amp',
+    path: ['stress_refi', 'choc_confiance', 'liquidite'],
+    steps: [
+      "Le stress de refinancement révèle les fragilités cachées (leverage, maturité mismatch)",
+      "Les inquiétudes déclenchent un choc de confiance (fuite des acheteurs marginaux, ventes forcées)",
+      "L'assèchement de liquidité amplifie en retour le stress de refinancement — spirale aiguë"
+    ],
+    mechanism: "Boucle rapide (jours à semaines) caractéristique des crises financières aiguës. Le mécanisme de fire sales transforme un problème de liquidité en problème de solvabilité. La rupture vient TOUJOURS du même point : un défaut de liquidité sur une classe d'actifs considérée comme sûre.",
+    pivot: "Le pivot est le choc de confiance. C'est pour interrompre cette boucle que les banques centrales créent des facilités de liquidité d'urgence (Bagehot : lend freely at a penalty rate against good collateral).",
+    timescale: "Horizon court (jours-semaines)",
+    historical: "LTCM 1998, Bear Stearns/Lehman 2008, Gilts UK 2022, SVB 2023."
+  },
+  {
+    id: 'loop-political-reg',
+    name: 'Doom-loop politico-réglementaire',
+    category: 'amp',
+    path: ['instab_pol', 'erosion_reg'],
+    steps: [
+      "L'instabilité politique affaiblit la capacité de supervision et la continuité réglementaire",
+      "L'érosion réglementaire dégrade la lisibilité du système et alimente en retour l'instabilité (griefs, capture d'intérêts, scandales)"
+    ],
+    mechanism: "Boucle courte mais profondément structurelle. Elle opère sur des horizons longs et creuse les fondations institutionnelles. Contrairement aux boucles financières, elle n'a pas de mécanisme endogène d'arrêt — seule une rupture politique (nouvelle coalition, réforme constitutionnelle, crise externe) peut l'interrompre.",
+    pivot: "Le pivot est la confiance institutionnelle. Une fois érodée sous un seuil critique, la restauration prend une génération (cf. travaux de Acemoglu & Robinson sur les institutions).",
+    timescale: "Horizon long (années-décennies)",
+    historical: "Argentine 1970-2000, Italie années 1990, certains États américains contemporains."
+  },
+  {
+    id: 'loop-em-sudden-stop',
+    name: 'Sudden stop émergent',
+    category: 'amp',
+    path: ['em_dettes', 'em_sudden_stop', 'instab_pol', 'choc_confiance', 'liquidite'],
+    steps: [
+      "La dette externe en devise des économies émergentes devient insoutenable (hausse taux US + appréciation dollar)",
+      "Le sudden stop déclenche un arrêt brutal des flux de capitaux entrants et un effondrement du change",
+      "La crise économique alimente l'instabilité politique (manifestations, changements de régime, répudiation)",
+      "L'instabilité précipite un choc de confiance généralisé sur la classe d'actifs émergente",
+      "La liquidité globale se contracte pour toute la classe EM — la pression s'intensifie sur toutes les dettes EM"
+    ],
+    mechanism: "Boucle de contagion régionale. Elle est typiquement déclenchée par un choc monétaire exogène (Fed tightening) mais s'auto-entretient ensuite via la contagion psychologique entre pays EM. Asymétrie critique : les pays ne peuvent pas emprunter dans leur monnaie (péché originel).",
+    pivot: "Le FMI et les swap lines inter-banques centrales sont les rares mécanismes qui peuvent l'interrompre — d'où l'importance systémique de ces institutions.",
+    timescale: "Horizon court-moyen (mois-années)",
+    historical: "Tequila 1994, Asie 1997, Russie 1998, Argentine 2001, 'Taper Tantrum' 2013, Turquie/Sri Lanka 2022."
+  },
+
+  // ---------- STABILISATRICES (vertueuses) ----------
+  {
+    id: 'loop-confidence-dividend',
+    name: 'Dividende de la confiance',
+    category: 'stab',
+    path: ['productivite', 'confiance', 'compression_inv'],
+    steps: [
+      "Une productivité réelle élevée signale la solidité des fondamentaux (ratios de solvabilité, croissance des revenus)",
+      "Cette solidité renforce la confiance monétaire et institutionnelle (primes de risque basses, valorisations stables)",
+      "La confiance rétablie desserre la compression de l'investissement — les agents réinvestissent, relancant la productivité"
+    ],
+    mechanism: "Boucle vertueuse miroir de la spirale dette-productivité. C'est l'équilibre stable recherché : croissance tirée par la productivité, confiance institutionnelle, investissement abondant. Le risque asymétrique : elle est lente à construire, rapide à détruire (Hemingway : 'gradually, then suddenly').",
+    pivot: "Le pivot est la productivité elle-même. Les politiques publiques visant la productivité (éducation, R&D, infrastructure) sont des interventions stabilisatrices structurelles.",
+    timescale: "Horizon long (5-10 ans pour s'établir)",
+    historical: "États-Unis années 1990 (révolution IT), Allemagne 2005-2015 (réformes Hartz + productivité industrielle)."
+  },
+  {
+    id: 'loop-monetary-safety-net',
+    name: 'Filet de sécurité monétaire',
+    category: 'stab',
+    path: ['pol_mon_nc', 'liquidite', 'confiance'],
+    steps: [
+      "La politique monétaire non conventionnelle (QE, facilités, forward guidance) injecte de la liquidité ciblée",
+      "La liquidité restaurée prévient les ventes forcées et stabilise les prix d'actifs",
+      "Le retour à des conditions de marché normales rétablit la confiance — moins de recours nécessaire au filet"
+    ],
+    mechanism: "Boucle d'intervention active. Elle fonctionne en contre-courant des boucles amplificatrices financières. Paradoxe temporel : elle stabilise à court terme mais peut amplifier les fragilités à long terme (aléa moral, allocation de ressources distordue, bulles d'actifs).",
+    pivot: "Efficace uniquement si la crédibilité de la banque centrale est préservée. Si les agents anticipent un sauvetage systématique, l'aléa moral dominera.",
+    timescale: "Horizon court (activation rapide, effets en semaines)",
+    historical: "Fed 2008-2020, BCE 2012 (Whatever it takes), Banque d'Angleterre 2022 (crise LDI des gilts)."
+  },
+  {
+    id: 'loop-global-coordination',
+    name: 'Coordination globale (backstop EM)',
+    category: 'stab',
+    path: ['fmi_bri', 'em_sudden_stop', 'confiance'],
+    steps: [
+      "La coordination internationale (FMI, BRI, swap lines) offre une liquidité d'urgence aux économies en sudden stop",
+      "L'amortisseur externe empêche la cascade de se propager (crise de change évitée ou contenue)",
+      "La restauration de la confiance sur la classe EM réduit la pression — le filet peut se retirer progressivement"
+    ],
+    mechanism: "Principal mécanisme ANTI-boucle-amplificatrice EM. Il est conditionnel : le FMI impose des ajustements structurels qui créent des tensions politiques. Son efficacité dépend de (1) la rapidité de déploiement, (2) l'ampleur suffisante, (3) l'acceptation politique locale.",
+    pivot: "La coordination internationale elle-même : si la fragmentation géopolitique réduit la capacité du FMI à agir (vetos, conditionnalités contestées), ce stabilisateur s'affaiblit.",
+    timescale: "Horizon court-moyen (déploiement en mois)",
+    historical: "Mexique 1995 (Tesobonos rescue), Asie 1997 (avec réserves), Argentine 2018 (programme FMI record)."
+  },
+  {
+    id: 'loop-innovation-compensation',
+    name: 'Innovation compensatrice',
+    category: 'stab',
+    path: ['innovation', 'productivite', 'confiance'],
+    steps: [
+      "Les gains de productivité issus de l'innovation technologique (IA, biotech, énergie) compensent les chocs structurels",
+      "La productivité retrouvée stabilise les ratios macro et nourrit la confiance systémique",
+      "La confiance et la croissance créent les conditions de financement pour une R&D accrue — le cycle se régénère"
+    ],
+    mechanism: "Contre-poids structurel au biais doom-loop du modèle. Elle opère sur des horizons longs (productivity J-curve : les gains suivent les investissements avec 5-10 ans de retard). Le risque : la concentration de ces gains peut réalimenter d'autres boucles (inégalités → instabilité politique).",
+    pivot: "La diffusion large des gains de productivité — pas seulement leur création. L'histoire montre que les révolutions technologiques non-diffusées (élite tech isolée) aggravent les tensions distributives.",
+    timescale: "Horizon très long (10-20 ans pour se matérialiser)",
+    historical: "Révolution verte agricole 1960s, révolution IT 1990-2010. Pari actuel : IA 2025-2040."
+  }
+];
+
+// ============================================================
+// CONSTRUCTION DES MAPS AUXILIAIRES
+// ============================================================
+const loopById = Object.fromEntries(loops.map(l => [l.id, l]));
+const nodeLoops = {}; // node id → array of loop ids
+loops.forEach(loop => {
+  loop.path.forEach(n => {
+    if (!nodeLoops[n]) nodeLoops[n] = [];
+    nodeLoops[n].push(loop.id);
+  });
+});
+
+function getLoopEdges(loop) {
+  const eIds = [];
+  for (let i = 0; i < loop.path.length; i++) {
+    const src = loop.path[i];
+    const dst = loop.path[(i + 1) % loop.path.length];
+    const edgeIdx = edges.findIndex(e => e.source === src && e.target === dst);
+    if (edgeIdx !== -1) eIds.push(`e${edgeIdx}`);
+  }
+  return eIds;
+}
+
+// ============================================================
+// INIT CYTOSCAPE
+// ============================================================
+const cy = cytoscape({
+  container: document.getElementById('cy'),
+  elements: (() => {
+    // ============================================================
+    // SEED POSITIONING : chaque bloc est une constellation
+    // positionnée autour d'un centre géographique dédié
+    // ============================================================
+    const BLOCK_CENTERS = {
+      macro:       { x:    0, y:    0 },   // cœur financier au centre
+      reelle:      { x: -700, y: -200 },   // économie réelle à gauche
+      social:      { x: -350, y:  600 },   // social en bas-gauche
+      structurel:  { x: -900, y:  300 },   // risques structurels à l'ouest
+      geo:         { x:  700, y: -500 },   // géopolitique nord-est
+      chine:       { x: 1100, y: -100 },   // Chine en orient
+      emergents:   { x: -1000, y: -500 },  // émergents nord-ouest
+      gouvnum:     { x:  400, y: -800 },   // gouv numérique au nord
+      other:       { x:    0, y:    0 },
+    };
+
+    // Regrouper les nœuds par bloc
+    const byBlock = {};
+    nodes.forEach(n => {
+      const b = nodeBlocks[n.id] || 'other';
+      if (!byBlock[b]) byBlock[b] = [];
+      byBlock[b].push(n.id);
+    });
+
+    // Assigner à chaque nœud une position initiale : centre du bloc + petit offset aléatoire
+    // Le offset est circulaire, rayon dépendant de la taille du bloc
+    const positions = {};
+    Object.entries(byBlock).forEach(([block, ids]) => {
+      const center = BLOCK_CENTERS[block] || BLOCK_CENTERS.other;
+      const radius = 80 + ids.length * 18; // rayon d'étalement dans le bloc
+      ids.forEach((id, idx) => {
+        const angle = (idx / ids.length) * Math.PI * 2 + (block.charCodeAt(0) % 7) * 0.1;
+        positions[id] = {
+          x: center.x + Math.cos(angle) * radius,
+          y: center.y + Math.sin(angle) * radius
+        };
+      });
+    });
+
+    return [
+      ...nodes.map(n => ({
+        group: 'nodes',
+        data: {
+          id: n.id,
+          label: n.label,
+          type: n.type,
+          original: n.original,
+          desc: n.desc,
+          geo: n.geo || false,
+          block: nodeBlocks[n.id] || 'other'
+        },
+        position: positions[n.id]  // ← position initiale par constellation
+      })),
+      ...edges.map((e, i) => {
+        const basePx = e.w === 3 ? 4.5 : e.w === 1 ? 1.0 : 2.2;
+        return {
+          group: 'edges',
+          data: {
+            id: `e${i}`,
+            source: e.source,
+            target: e.target,
+            type: e.type,
+            weight: e.w || 2,
+            widthPx: basePx,
+            justif: e.justif || ''
+          }
+        };
+      })
+    ];
+  })(),
+  style: [
+    {
+      selector: 'node',
+      style: {
+        'label': 'data(label)',
+        'text-valign': 'center',
+        'text-halign': 'center',
+        'font-family': 'IBM Plex Sans, sans-serif',
+        'font-size': '9px',
+        'font-weight': '400',
+        'text-wrap': 'wrap',
+        'text-max-width': '110px',
+        'width': '120px',
+        'height': '50px',
+        'shape': 'round-rectangle',
+        'border-width': '1px',
+        'border-color': '#3a3a5a',
+        'background-color': '#16162a',
+        'color': '#c8c8e0',
+        'text-outline-width': 0,
+        'padding': '6px',
+        'transition-property': 'background-color, border-color, border-width, opacity',
+        'transition-duration': '320ms',
+        'transition-timing-function': 'ease-in-out',
+      }
+    },
+    { selector: 'node[type="source"]', style: { 'background-color': '#2c1010', 'border-color': '#c0392b', 'border-width': '1.5px', 'color': '#f0a090' } },
+    { selector: 'node[type="amplifier"]', style: { 'background-color': '#1e1508', 'border-color': '#e67e22', 'border-width': '1px', 'color': '#f0c080' } },
+    { selector: 'node[type="output"]', style: { 'background-color': '#080e1e', 'border-color': '#2980b9', 'border-width': '1.5px', 'color': '#80b8f0' } },
+    { selector: 'node[type="stabilizer"]', style: { 'background-color': '#081a10', 'border-color': '#27ae60', 'border-width': '2px', 'color': '#80e0a0' } },
+    { selector: 'node[type="geo"]', style: { 'background-color': '#1e1800', 'border-color': '#c9a227', 'border-width': '2px', 'color': '#f0d070', 'width': '130px', 'height': '60px', 'font-size': '8.5px' } },
+    { selector: 'node[id="confiance"]', style: { 'border-width': '2.5px', 'border-color': '#5090d0', 'background-color': '#081424', 'color': '#90c8ff', 'font-weight': '600', 'font-size': '10px', 'width': '140px', 'height': '60px' } },
+    { selector: 'node[type="geo"][id="chine"], node[type="geo"][id="em_dettes"], node[type="geo"][id="gn_gouvernance"]', style: { 'border-width': '2.5px', 'border-color': '#f0c020', 'background-color': '#241e00', 'color': '#fde080', 'font-weight': '600', 'font-size': '9px', 'width': '140px', 'height': '65px' } },
+
+    {
+      selector: 'edge',
+      style: {
+        'width': function(ele) { return ele.data('widthPx') || 1.5; },
+        'line-color': '#3a3a5a',
+        'target-arrow-color': '#3a3a5a',
+        'target-arrow-shape': 'triangle',
+        'curve-style': 'bezier',
+        'control-point-step-size': 40,
+        'arrow-scale': 0.8,
+        'opacity': 0.7,
+        'transition-property': 'line-color, target-arrow-color, opacity',
+        'transition-duration': '280ms',
+        'transition-timing-function': 'ease-in-out',
+      }
+    },
+    { selector: 'edge[type="default"]', style: { 'line-color': '#5a5a8a', 'target-arrow-color': '#5a5a8a' } },
+    { selector: 'edge[type="negative"]', style: { 'line-color': '#8a3030', 'target-arrow-color': '#8a3030' } },
+    { selector: 'edge[type="stabilizer"]', style: { 'line-color': '#2a6a40', 'target-arrow-color': '#2a6a40', 'line-style': 'dashed', 'line-dash-pattern': [6, 3] } },
+    { selector: 'edge[type="geo"]', style: { 'line-color': '#6a5010', 'target-arrow-color': '#6a5010', 'opacity': 0.75 } },
+
+    // ===== LOOP STATES =====
+    {
+      selector: 'node.loop-member-amp',
+      style: {
+        'border-color': '#e67e22',
+        'border-width': '3px',
+        'background-color': '#2a1a0a',
+        'color': '#ffb060',
+        'z-index': 100,
+      }
+    },
+    {
+      selector: 'node.loop-member-stab',
+      style: {
+        'border-color': '#4eb583',
+        'border-width': '3px',
+        'background-color': '#0a241a',
+        'color': '#7adfaf',
+        'z-index': 100,
+      }
+    },
+    {
+      selector: 'edge.loop-edge-amp',
+      style: {
+        'line-color': '#e67e22',
+        'target-arrow-color': '#e67e22',
+        'width': '3px',
+        'opacity': 1,
+        'line-style': 'solid',
+        'z-index': 90,
+        'curve-style': 'bezier',
+      }
+    },
+    {
+      selector: 'edge.loop-edge-stab',
+      style: {
+        'line-color': '#4eb583',
+        'target-arrow-color': '#4eb583',
+        'width': '3px',
+        'opacity': 1,
+        'line-style': 'solid',
+        'z-index': 90,
+        'curve-style': 'bezier',
+      }
+    },
+    {
+      selector: '.highlighted',
+      style: {
+        'border-color': '#f0e060',
+        'border-width': '2.5px',
+        'background-color': '#2a2808',
+        'color': '#f0e060',
+        'z-index': 100,
+      }
+    },
+    { selector: '.highlighted-edge', style: { 'width': '2px', 'opacity': 1, 'z-index': 90 } },
+    { selector: '.dimmed', style: { 'opacity': 0.08 } },
+    { selector: '.hidden', style: { 'display': 'none' } },
+    // --- États visuels de la simulation ---
+    { selector: '.sim-source', style: { 'background-color': '#2a2a00', 'border-color': '#ffffff', 'border-width': '3px', 'color': '#ffffff', 'z-index': 200 } },
+    { selector: '.sim-high', style: { 'background-color': '#3a0000', 'border-color': '#ff1010', 'border-width': '2.5px', 'color': '#ff8080', 'z-index': 150 } },
+    { selector: '.sim-med', style: { 'background-color': '#2a1200', 'border-color': '#ff7700', 'border-width': '2px', 'color': '#ffaa66', 'z-index': 140 } },
+    { selector: '.sim-low', style: { 'background-color': '#1c1600', 'border-color': '#ffcc00', 'border-width': '2px', 'color': '#ffee77', 'z-index': 130 } },
+    { selector: '.sim-trace', style: { 'background-color': '#14100a', 'border-color': '#776600', 'border-width': '1.5px', 'color': '#bbaa44', 'z-index': 120 } },
+    { selector: '.sim-edge-active', style: { 'line-color': '#ff7700', 'target-arrow-color': '#ff7700', 'opacity': 1, 'z-index': 160 } },
+    { selector: '.sim-edge-trace', style: { 'line-color': '#886600', 'target-arrow-color': '#886600', 'opacity': 0.7, 'z-index': 110 } },
+    { selector: '.sim-stabilizer-active', style: { 'background-color': '#0a2a14', 'border-color': '#27ae60', 'border-width': '2.5px', 'color': '#5fcc88', 'z-index': 135 } },
+    { selector: '.sim-edge-stabilizer', style: { 'line-color': '#2a8a50', 'target-arrow-color': '#2a8a50', 'opacity': 1, 'z-index': 125, 'line-style': 'dashed' } },
+  ],
+  layout: {
+    name: 'preset',
+    fit: true,
+    padding: 50
+  },
+  zoom: 0.55,
+  pan: { x: 30, y: 30 },
+  minZoom: 0.1,
+  maxZoom: 3,
+  wheelSensitivity: 0.3,
+});
+
+cy.ready(() => cy.fit(undefined, 30));
+
+// ============================================================
+// TOOLTIP DE POIDS + JUSTIFICATION AU SURVOL D'ARÊTE
+// ============================================================
+let tooltipVisible = false;
+let mouseX = 0, mouseY = 0;
+
+document.addEventListener('mousemove', function(e) {
+  mouseX = e.clientX;
+  mouseY = e.clientY;
+  if (tooltipVisible) updateTooltipPos();
+});
+
+cy.on('mouseover', 'edge', function(evt) {
+  const edge = evt.target;
+  const w = edge.data('weight');
+  const justif = edge.data('justif');
+  if (!justif) return;
+
+  const srcNode = cy.getElementById(edge.data('source'));
+  const tgtNode = cy.getElementById(edge.data('target'));
+  const srcLabel = (srcNode.data('label') || '').replace(/\n/g, ' ').replace(/\s+/g, ' ').trim();
+  const tgtLabel = (tgtNode.data('label') || '').replace(/\n/g, ' ').replace(/\s+/g, ' ').trim();
+
+  const wLabel = w === 3
+    ? '■ Liaison forte — quasi-mécanique'
+    : w === 2
+      ? '▪ Liaison modérée — probabiliste sous stress'
+      : '· Liaison faible — contextuelle, délai long';
+  const wColor = w === 3 ? '#ff6060' : w === 2 ? '#ffaa66' : '#8899aa';
+
+  document.getElementById('tt-nodes').textContent = `${srcLabel} → ${tgtLabel}`;
+  const ttw = document.getElementById('tt-weight');
+  ttw.textContent = wLabel;
+  ttw.style.color = wColor;
+  document.getElementById('tt-justif').textContent = justif;
+
+  document.getElementById('edge-tooltip').style.display = 'block';
+  tooltipVisible = true;
+  updateTooltipPos();
+});
+
+cy.on('mouseout', 'edge', function() {
+  document.getElementById('edge-tooltip').style.display = 'none';
+  tooltipVisible = false;
+});
+
+function updateTooltipPos() {
+  const tt = document.getElementById('edge-tooltip');
+  const vw = window.innerWidth, vh = window.innerHeight;
+  const tw = tt.offsetWidth || 280, th = tt.offsetHeight || 100;
+  let left = mouseX + 16, top = mouseY - 12;
+  if (left + tw > vw - 8) left = mouseX - tw - 12;
+  if (top + th > vh - 8) top = vh - th - 8;
+  if (top < 8) top = 8;
+  tt.style.left = left + 'px';
+  tt.style.top = top + 'px';
+}
+
+// ============================================================
+// ANIMATION DE FLUX SUR ARÊTES (requestAnimationFrame)
+// Principe : déplace line-dash-offset pour créer un effet de "fourmis
+// qui marchent" — le cerveau interprète naturellement le mouvement
+// comme un flux causal.
+// Rythme lent (~60px/s) pour ne pas solliciter l'attention visuelle
+// trop fortement (principe de Dehaene : charge attentionnelle réduite).
+// ============================================================
+let flowAnimationId = null;
+let flowOffset = 0;
+let activeLoopEdges = [];
+
+function startFlowAnimation(loopEdgeIds, category) {
+  stopFlowAnimation();
+  activeLoopEdges = loopEdgeIds;
+  const color = category === 'amp' ? '#e67e22' : '#4eb583';
+  const lastFrame = { t: performance.now() };
+
+  const animate = (now) => {
+    const dt = Math.min(now - lastFrame.t, 50);
+    lastFrame.t = now;
+    // ~60 px/s vers l'avant
+    flowOffset -= dt * 0.06;
+    if (flowOffset < -1000) flowOffset += 1000;
+
+    activeLoopEdges.forEach(id => {
+      const edge = cy.getElementById(id);
+      if (edge && edge.length) {
+        edge.style({
+          'line-style': 'dashed',
+          'line-dash-pattern': [12, 6],
+          'line-dash-offset': flowOffset,
+          'line-color': color,
+          'target-arrow-color': color,
+          'width': 3,
+          'opacity': 1,
+        });
+      }
+    });
+    flowAnimationId = requestAnimationFrame(animate);
+  };
+  flowAnimationId = requestAnimationFrame(animate);
+}
+
+function stopFlowAnimation() {
+  if (flowAnimationId) {
+    cancelAnimationFrame(flowAnimationId);
+    flowAnimationId = null;
+  }
+  activeLoopEdges.forEach(id => {
+    const edge = cy.getElementById(id);
+    if (edge && edge.length) edge.removeStyle();
+  });
+  activeLoopEdges = [];
+}
+
+// ============================================================
+// PULSE "RESPIRATION" SUR NŒUDS DE BOUCLE
+// Pulsation lente (cycle 2.4s, ease-in-out-sine) : en dessous du seuil
+// d'attention involontaire, mais suffisante pour ancrer visuellement
+// les nœuds de la boucle dans le regard périphérique.
+// ============================================================
+let pulseAnimationId = null;
+let pulseNodes = [];
+
+function startPulse(nodeIds, category) {
+  stopPulse();
+  pulseNodes = nodeIds;
+  const start = performance.now();
+
+  const animate = (now) => {
+    const t = (now - start) / 1000;
+    // Onde sinusoïdale douce, période 2.4s
+    const phase = (Math.sin(t * Math.PI / 1.2) + 1) / 2; // 0..1
+    const borderWidth = 2.8 + phase * 2; // 2.8 → 4.8
+
+    pulseNodes.forEach(id => {
+      const n = cy.getElementById(id);
+      if (n && n.length) n.style('border-width', borderWidth);
+    });
+    pulseAnimationId = requestAnimationFrame(animate);
+  };
+  pulseAnimationId = requestAnimationFrame(animate);
+}
+
+function stopPulse() {
+  if (pulseAnimationId) {
+    cancelAnimationFrame(pulseAnimationId);
+    pulseAnimationId = null;
+  }
+  pulseNodes.forEach(id => {
+    const n = cy.getElementById(id);
+    if (n && n.length) n.removeStyle('border-width');
+  });
+  pulseNodes = [];
+}
+
+// ============================================================
+// GESTION DES MODES ET FILTRES
+// ============================================================
+let currentMode = 'default'; // 'default' | 'loops'
+let activeLoopId = null;
+let selectedNodes = new Set();
+let lastSelectedId = null;
+
+function enterLoopsMode() {
+  if (currentMode === 'loops') return;
+  // Exclusif avec la simulation
+  if (simMode) toggleSimMode();
+  currentMode = 'loops';
+  document.getElementById('btn-loops').classList.add('active');
+  document.getElementById('legend-standard').style.display = 'none';
+  document.getElementById('loops-panel').classList.add('active');
+  document.getElementById('info-panel').style.display = 'none';
+  cy.elements().removeClass('hidden dimmed highlighted highlighted-edge');
+  cy.elements().addClass('dimmed');
+  if (!activeLoopId) {
+    document.getElementById('loop-detail-container').innerHTML = '';
+    hideLoopBanner();
+  }
+}
+
+function exitLoopsMode() {
+  if (currentMode !== 'loops') return;
+  currentMode = 'default';
+  document.getElementById('btn-loops').classList.remove('active');
+  document.getElementById('legend-standard').style.display = 'block';
+  document.getElementById('loops-panel').classList.remove('active');
+  document.getElementById('info-panel').style.display = 'block';
+  clearAllLoopState();
+  cy.elements().removeClass('dimmed hidden highlighted highlighted-edge');
+}
+
+function toggleLoopsMode() {
+  if (currentMode === 'loops') exitLoopsMode();
+  else enterLoopsMode();
+}
+
+// Compatibilité : anciennes références à setMode dans le code (badges in-loops)
+function setMode(mode) {
+  if (mode === 'loops') enterLoopsMode();
+}
+
+function clearAllLoopState() {
+  stopFlowAnimation();
+  stopPulse();
+  cy.nodes().removeClass('loop-member-amp loop-member-stab');
+  cy.edges().removeClass('loop-edge-amp loop-edge-stab');
+  activeLoopId = null;
+  document.querySelectorAll('.loop-card').forEach(c => c.classList.remove('active'));
+  hideLoopBanner();
+  document.getElementById('loop-detail-container').innerHTML = '';
+}
+
+// ============================================================
+// ACTIVATION D'UNE BOUCLE
+// ============================================================
+function selectLoop(loopId) {
+  const loop = loopById[loopId];
+  if (!loop) return;
+
+  // Si on re-clique la même, on désélectionne
+  if (activeLoopId === loopId) {
+    clearAllLoopState();
+    // Retour au mode loops standard (tout dimmed)
+    cy.elements().removeClass('highlighted highlighted-edge');
+    cy.elements().addClass('dimmed');
+    return;
+  }
+
+  // Reset
+  stopFlowAnimation();
+  stopPulse();
+  cy.nodes().removeClass('loop-member-amp loop-member-stab');
+  cy.edges().removeClass('loop-edge-amp loop-edge-stab');
+
+  // Make sure we're in loops mode
+  if (currentMode !== 'loops') setMode('loops');
+
+  cy.elements().removeClass('hidden dimmed highlighted highlighted-edge');
+
+  // Dim tout
+  cy.elements().addClass('dimmed');
+
+  // Activer nœuds de la boucle
+  const loopEdgeIds = getLoopEdges(loop);
+  loop.path.forEach(nid => {
+    const n = cy.getElementById(nid);
+    n.removeClass('dimmed').addClass(`loop-member-${loop.category}`);
+  });
+  loopEdgeIds.forEach(eid => {
+    const e = cy.getElementById(eid);
+    e.removeClass('dimmed').addClass(`loop-edge-${loop.category}`);
+  });
+
+  // Démarrer les animations
+  startFlowAnimation(loopEdgeIds, loop.category);
+  startPulse(loop.path, loop.category);
+
+  // Centrer la vue sur la boucle (animation douce)
+  const loopNodes = cy.collection(loop.path.map(id => cy.getElementById(id)));
+  cy.animate({
+    fit: { eles: loopNodes, padding: 120 },
+    easing: 'ease-in-out-cubic',
+    duration: 700,
+  });
+
+  // UI
+  activeLoopId = loopId;
+  document.querySelectorAll('.loop-card').forEach(c => {
+    c.classList.toggle('active', c.dataset.loop === loopId);
+  });
+  showLoopBanner(loop);
+  showLoopDetail(loop);
+}
+
+function showLoopBanner(loop) {
+  const banner = document.getElementById('loop-banner');
+  banner.className = `loop-banner visible ${loop.category}`;
+  document.getElementById('loop-banner-title').textContent = `↻ ${loop.name}`;
+  document.getElementById('loop-banner-hint').textContent =
+    `${loop.path.length} étapes · ${loop.category === 'amp' ? 'Amplificatrice' : 'Stabilisatrice'}`;
+}
+
+function hideLoopBanner() {
+  document.getElementById('loop-banner').className = 'loop-banner';
+}
+
+function showLoopDetail(loop) {
+  const container = document.getElementById('loop-detail-container');
+  const nodeLabels = {};
+  nodes.forEach(n => nodeLabels[n.id] = n.label.replace(/\n/g, ' '));
+
+  const pathHtml = loop.path.map((nid, i) => {
+    const isLast = i === loop.path.length - 1;
+    const stepText = loop.steps[i] || '';
+    const arrow = isLast
+      ? `<div class="step-arrow">↺ <span class="step-text">${stepText}</span><br><em style="color:var(--text-soft);font-size:9.5px;">referme vers ${nodeLabels[loop.path[0]]}</em></div>`
+      : `<div class="step-arrow">↓ <span class="step-text">${stepText}</span></div>`;
+    return `<div>
+      <span class="step-num">${i + 1}</span>${nodeLabels[nid]}
+      ${arrow}
+    </div>`;
+  }).join('');
+
+  container.innerHTML = `
+    <div class="loop-detail">
+      <div class="loop-detail-title">${loop.name}</div>
+      <div class="loop-detail-mech ${loop.category}">
+        <strong>Mécanisme — </strong>${loop.mechanism}
+      </div>
+      <div style="font-family:'IBM Plex Mono',monospace;font-size:9px;text-transform:uppercase;letter-spacing:0.1em;color:var(--text-dim);margin-top:10px;margin-bottom:6px;">Chemin causal</div>
+      <div class="loop-path ${loop.category}">${pathHtml}</div>
+      <div style="font-family:'IBM Plex Mono',monospace;font-size:9px;text-transform:uppercase;letter-spacing:0.1em;color:var(--text-dim);margin-top:10px;margin-bottom:4px;">Point de levier</div>
+      <div style="color:var(--text);font-size:11px;line-height:1.55;">${loop.pivot}</div>
+      <div style="font-family:'IBM Plex Mono',monospace;font-size:9px;text-transform:uppercase;letter-spacing:0.1em;color:var(--text-dim);margin-top:10px;margin-bottom:4px;">Échelle temporelle</div>
+      <div style="color:var(--text);font-size:11px;">${loop.timescale}</div>
+      <div style="font-family:'IBM Plex Mono',monospace;font-size:9px;text-transform:uppercase;letter-spacing:0.1em;color:var(--text-dim);margin-top:10px;margin-bottom:4px;">Illustrations historiques</div>
+      <div style="color:var(--text-dim);font-size:10.5px;font-style:italic;line-height:1.5;">${loop.historical}</div>
+    </div>
+  `;
+}
+
+// ============================================================
+// CONSTRUIRE LES CARTES DE BOUCLES
+// ============================================================
+function renderLoopCards() {
+  const ampList = document.getElementById('loop-list-amp');
+  const stabList = document.getElementById('loop-list-stab');
+
+  loops.filter(l => l.category === 'amp').forEach((loop, i) => {
+    const card = document.createElement('div');
+    card.className = 'loop-card amp';
+    card.dataset.loop = loop.id;
+    card.innerHTML = `
+      <div class="loop-card-header">
+        <div class="loop-card-name">A${i+1}. ${loop.name}</div>
+        <div class="loop-card-steps">${loop.path.length} ét.</div>
+      </div>
+      <div class="loop-card-desc">${loop.steps[0].substring(0, 90)}...</div>
+    `;
+    card.onclick = () => selectLoop(loop.id);
+    ampList.appendChild(card);
+  });
+
+  loops.filter(l => l.category === 'stab').forEach((loop, i) => {
+    const card = document.createElement('div');
+    card.className = 'loop-card stab';
+    card.dataset.loop = loop.id;
+    card.innerHTML = `
+      <div class="loop-card-header">
+        <div class="loop-card-name">S${i+1}. ${loop.name}</div>
+        <div class="loop-card-steps">${loop.path.length} ét.</div>
+      </div>
+      <div class="loop-card-desc">${loop.steps[0].substring(0, 90)}...</div>
+    `;
+    card.onclick = () => selectLoop(loop.id);
+    stabList.appendChild(card);
+  });
+}
+renderLoopCards();
+
+// ============================================================
+// CLIC NŒUD
+// ============================================================
+cy.on('tap', 'node', function(evt) {
+  if (currentMode === 'loops') return;
+
+  const node = evt.target;
+
+  // Mode simulation : on sélectionne la source du choc
+  if (simMode) {
+    simSelectedNode = node;
+    showSimPanel(node);
+    return;
+  }
+
+  const id = node.id();
+
+  if (selectedNodes.has(id)) {
+    // Toggle off : retirer ce nœud de la sélection
+    selectedNodes.delete(id);
+    if (lastSelectedId === id) {
+      // Si c'était le nœud focus du panneau, passer au dernier restant
+      lastSelectedId = selectedNodes.size > 0
+        ? Array.from(selectedNodes).pop()
+        : null;
+    }
+  } else {
+    // Ajouter ce nœud à la sélection
+    selectedNodes.add(id);
+    lastSelectedId = id;
+  }
+
+  refreshSelectionDisplay();
+});
+
+cy.on('tap', function(evt) {
+  if (evt.target === cy && currentMode !== 'loops' && !simMode) {
+    // Clic dans le vide : tout désélectionner
+    selectedNodes.clear();
+    lastSelectedId = null;
+    refreshSelectionDisplay();
+  }
+});
+
+// ============================================================
+// SIMULATION DE CHOC — propagation en cascade pondérée
+// ============================================================
+let simMode = false;
+let simRunning = false;
+let simTimeouts = [];
+let simSelectedNode = null;
+
+function toggleSimMode() {
+  simMode = !simMode;
+  const btn = document.getElementById('btn-sim');
+  btn.classList.toggle('active', simMode);
+  document.getElementById('cy').classList.toggle('sim-cursor', simMode);
+  document.getElementById('sim-hint').classList.toggle('visible', simMode);
+  document.getElementById('sim-panel').classList.toggle('visible', simMode);
+
+  // Bascule des légendes : standard ↔ simulation
+  document.getElementById('legend-standard').style.display = simMode ? 'none' : 'block';
+  document.getElementById('legend-simulation').style.display = simMode ? 'block' : 'none';
+
+  if (simMode) {
+    // Si le mode Boucles était actif, on en sort
+    if (currentMode === 'loops') exitLoopsMode();
+    // Nettoyer la sélection classique
+    selectedNodes.clear();
+    lastSelectedId = null;
+    cy.elements().removeClass('highlighted highlighted-edge dimmed');
+    showDefault();
+    // Attacher le listener du toggle stabilisateurs (au premier passage uniquement)
+    const stabToggle = document.getElementById('sim-stab-toggle');
+    if (stabToggle && !stabToggle.dataset.listenerAttached) {
+      stabToggle.dataset.listenerAttached = 'yes';
+      stabToggle.addEventListener('change', () => {
+        const hint = document.getElementById('sim-toggle-hint');
+        const stabLegendRow = document.getElementById('legend-stab-row');
+        if (stabToggle.checked) {
+          hint.textContent = 'FMI · QE · régulation macroprudentielle · fonds souverains absorbent une partie du choc';
+          if (stabLegendRow) stabLegendRow.style.display = '';
+        } else {
+          hint.textContent = '⚠ Simulation d\'un système sans amortisseurs — choc brut, propagation intégrale';
+          if (stabLegendRow) stabLegendRow.style.display = 'none';
+        }
+        // Si une simulation tourne déjà, la relancer pour comparaison
+        if (simSelectedNode && document.getElementById('sim-reset-btn').classList.contains('visible')) {
+          runShock();
+        }
+      });
+    }
+  } else {
+    // Quitter le mode : tout nettoyer
+    resetSimulation(true);
+    cy.elements().removeClass('dimmed hidden highlighted highlighted-edge');
+    showDefault();
+  }
+}
+
+function showSimPanel(node) {
+  const d = node.data();
+  const name = d.label.replace(/\n/g,' ').replace(/\s+/g,' ').trim();
+  document.getElementById('sim-node-name').textContent = name;
+  document.getElementById('sim-status').textContent = 'Cliquez "Lancer le choc" pour propager.';
+  document.getElementById('sim-reset-btn').classList.remove('visible');
+  document.getElementById('sim-hint').classList.remove('visible');
+}
+
+// Animation d'un flux lumineux le long d'une arête
+// Couleur harmonisée avec le type du nœud cible
+function animateFlux(sourceNode, targetNode, durationMs) {
+  const overlay = document.getElementById('flux-overlay');
+  if (!overlay) return;
+
+  const srcPos = sourceNode.renderedPosition();
+  const tgtPos = targetNode.renderedPosition();
+  const targetType = targetNode.data('type') || 'amplifier';
+
+  const particle = document.createElement('div');
+  particle.className = `flux-particle flux-${targetType}`;
+  // Position initiale SANS transition (pour éviter qu'elle anime depuis 0,0)
+  particle.style.transition = 'none';
+  particle.style.left = srcPos.x + 'px';
+  particle.style.top = srcPos.y + 'px';
+  overlay.appendChild(particle);
+
+  // Forcer un reflow pour que le navigateur enregistre la position de départ
+  // avant d'appliquer la transition et la position finale
+  // eslint-disable-next-line no-unused-expressions
+  particle.offsetHeight;
+
+  // Double requestAnimationFrame : garantit que la position de départ est bien appliquée
+  // avant que la transition et la position cible soient déclenchées
+  requestAnimationFrame(() => {
+    requestAnimationFrame(() => {
+      particle.style.transition = `left ${durationMs}ms cubic-bezier(0.25, 0.1, 0.25, 1), top ${durationMs}ms cubic-bezier(0.25, 0.1, 0.25, 1), opacity 400ms ease-out`;
+      particle.style.left = tgtPos.x + 'px';
+      particle.style.top = tgtPos.y + 'px';
+    });
+  });
+
+  // Fade out prolongé pour laisser une traîne + suppression
+  setTimeout(() => {
+    particle.style.opacity = '0';
+  }, durationMs - 300);
+  setTimeout(() => {
+    if (particle.parentNode) particle.parentNode.removeChild(particle);
+  }, durationMs + 200);
+}
+
+// Nettoyer toutes les particules en cours (appelé au reset)
+function clearAllFlux() {
+  const overlay = document.getElementById('flux-overlay');
+  if (overlay) overlay.innerHTML = '';
+}
+
+// Pulsation brève d'un nœud à l'instant où le choc l'atteint
+// Style sobre : bordure qui s'épaissit + léger flash blanc qui se résorbe
+function pulseNode(node) {
+  const el = node;
+  const currentBorder = parseFloat(el.style('border-width')) || 1;
+  const originalColor = el.style('border-color');
+
+  // Phase 1 : la bordure s'épaissit et vire au blanc éclatant
+  el.style({
+    'border-width': (currentBorder + 3) + 'px',
+    'border-color': '#ffffff',
+  });
+
+  // Phase 2 (300 ms) : la bordure revient à sa couleur mais reste un peu épaissie
+  setTimeout(() => {
+    el.style({
+      'border-color': originalColor,
+      'border-width': (currentBorder + 1) + 'px',
+    });
+  }, 300);
+
+  // Phase 3 (600 ms) : retour à l'état nominal
+  setTimeout(() => {
+    el.removeStyle('border-width');
+    el.removeStyle('border-color');
+  }, 600);
+}
+
+function runShock() {
+  if (!simSelectedNode) {
+    document.getElementById('sim-status').textContent = '⚠ Cliquez d\'abord un nœud sur le graphe.';
+    return;
+  }
+  if (simRunning) resetSimulation(true);
+
+  simRunning = true;
+  const stabActive = document.getElementById('sim-stab-toggle').checked;
+  document.getElementById('sim-panel').classList.toggle('stab-off', !stabActive);
+  const legendStabRow = document.getElementById('legend-stab-row');
+  if (legendStabRow) legendStabRow.style.display = stabActive ? '' : 'none';
+
+  document.getElementById('sim-reset-btn').classList.add('visible');
+  document.getElementById('sim-status').textContent = '⚡ Propagation en cours...';
+  document.getElementById('sim-hint').classList.remove('visible');
+
+  const sourceId = simSelectedNode.id();
+  const sourceMult = 1.0; // intensité fixe
+  const wFactor = { 3: 0.85, 2: 0.55, 1: 0.25 };
+  // Atténuation apportée par un stabilisateur qui reçoit une arête stab entrante
+  const stabDampening = { 3: 0.45, 2: 0.65, 1: 0.85 }; // plus la stab est forte, plus elle réduit
+
+  // BFS niveau par niveau
+  const shockLevel = {};
+  shockLevel[sourceId] = sourceMult;
+
+  // Identifier les stabilisateurs mobilisés pour cette simulation
+  const stabilizersActivated = new Set();
+
+  const levels = [[ { nodeId: sourceId, edgeId: null } ]];
+  const visited = new Set([sourceId]);
+
+  let current = 0;
+  while (current < 15) {
+    const currentItems = levels[current];
+    if (!currentItems || currentItems.length === 0) break;
+
+    const nextItems = [];
+    for (const item of currentItems) {
+      const node = cy.getElementById(item.nodeId);
+      const nodeShock = shockLevel[item.nodeId];
+
+      node.outgoers('edge').forEach(edge => {
+        // Ignorer les arêtes de clustering (fictives, servent juste au layout)
+        if (edge.data('cluster')) return;
+        // Les arêtes stabilisatrices ne propagent pas le choc (elles amortissent, elles ne diffusent pas)
+        if (edge.data('type') === 'stabilizer') return;
+
+        const targetId = edge.data('target');
+        if (visited.has(targetId)) return;
+
+        const w = edge.data('weight') || 2;
+        let propLevel = nodeShock * (wFactor[w] || 0.55);
+
+        // Si stabilisateurs actifs : chercher si la cible reçoit une stabilisation
+        if (stabActive) {
+          const targetNode = cy.getElementById(targetId);
+          let bestStabW = 0;
+          let bestStabSource = null;
+          targetNode.incomers('edge').forEach(inEdge => {
+            if (inEdge.data('type') === 'stabilizer') {
+              const sw = inEdge.data('weight') || 2;
+              if (sw > bestStabW) {
+                bestStabW = sw;
+                bestStabSource = inEdge.data('source');
+              }
+            }
+          });
+          if (bestStabW > 0) {
+            propLevel *= stabDampening[bestStabW];
+            if (bestStabSource) stabilizersActivated.add(bestStabSource);
+          }
+        }
+
+        if (propLevel < 0.05) return;
+
+        visited.add(targetId);
+        shockLevel[targetId] = propLevel;
+        nextItems.push({ nodeId: targetId, edgeId: edge.id() });
+      });
+    }
+
+    if (nextItems.length === 0) break;
+    levels.push(nextItems);
+    current++;
+  }
+
+  const totalActivated = Object.keys(shockLevel).length;
+  const totalLevels = levels.length - 1; // niveau 0 = source seule, donc nb de vagues = length-1
+
+  // === Animation ===
+  const EDGE_LEAD = 2200;   // durée d'un flux sur une arête
+  const FLUX_STAGGER = 150; // décalage entre deux flux dans un même niveau
+  const LEVEL_PAUSE = 500;  // pause marquée entre deux niveaux
+
+  // Afficher et initialiser le compteur de niveau
+  const counter = document.getElementById('level-counter');
+  document.getElementById('level-counter-total').textContent = totalLevels;
+  document.getElementById('level-counter-num').textContent = '0';
+  document.getElementById('level-counter-label').textContent = 'choc initial';
+  counter.classList.add('visible');
+
+  cy.elements().style({ opacity: 0.08 });
+  cy.getElementById(sourceId).style({ opacity: 1 }).addClass('sim-source');
+  pulseNode(cy.getElementById(sourceId));
+
+  // Construire la liste des transitions par niveau : items triés par intensité décroissante
+  const levelTransitions = [];
+  for (let lvl = 1; lvl < levels.length; lvl++) {
+    const items = [...levels[lvl]];
+    // Tri par intensité décroissante — les flux les plus forts partent en premier
+    items.sort((a, b) => (shockLevel[b.nodeId] || 0) - (shockLevel[a.nodeId] || 0));
+    levelTransitions.push(items);
+  }
+
+  // Calculer le début de chaque niveau (avec pauses inter-niveaux)
+  const levelStarts = [0]; // niveau 0 commence à t=0 (la source)
+  for (let lvl = 1; lvl < levels.length; lvl++) {
+    const prevDuration = EDGE_LEAD + (levelTransitions[lvl - 1].length - 1) * FLUX_STAGGER;
+    levelStarts.push(levelStarts[lvl - 1] + prevDuration + LEVEL_PAUSE);
+  }
+
+  // Niveau 0 → flux depuis la source
+  // (échelonnés aussi pour la lisibilité)
+  const sourceEdges = [];
+  levels[0].forEach(item => {
+    cy.getElementById(item.nodeId).outgoers('edge').forEach(edge => {
+      if (edge.data('cluster')) return;
+      if (edge.data('type') === 'stabilizer') return;
+      const targetId = edge.data('target');
+      if (shockLevel[targetId] === undefined) return;
+      sourceEdges.push({
+        edge: edge,
+        intensity: shockLevel[targetId] || 0
+      });
+    });
+  });
+  // Tri par intensité décroissante
+  sourceEdges.sort((a, b) => b.intensity - a.intensity);
+
+  sourceEdges.forEach((item, idx) => {
+    simTimeouts.push(setTimeout(() => {
+      item.edge.style({ opacity: 1 });
+      animateFlux(item.edge.source(), item.edge.target(), EDGE_LEAD);
+    }, idx * FLUX_STAGGER));
+  });
+
+  // Niveaux suivants
+  for (let lvl = 1; lvl < levels.length; lvl++) {
+    const levelItems = levelTransitions[lvl - 1];
+    const levelStart = levelStarts[lvl];
+
+    // A. Mise à jour du compteur au début du niveau
+    simTimeouts.push(setTimeout(() => {
+      counter.classList.add('transitioning');
+      document.getElementById('level-counter-num').textContent = lvl;
+      document.getElementById('level-counter-label').textContent =
+        `propagation · ${levelItems.length} transmission${levelItems.length > 1 ? 's' : ''}`;
+      setTimeout(() => counter.classList.remove('transitioning'), 400);
+    }, levelStart));
+
+    // B. Flux échelonnés par intensité décroissante
+    levelItems.forEach((item, idx) => {
+      simTimeouts.push(setTimeout(() => {
+        if (item.edgeId) {
+          const edge = cy.getElementById(item.edgeId);
+          const lv = shockLevel[item.nodeId] || 0;
+          const edgeCls = lv >= 0.45 ? 'sim-edge-active' : 'sim-edge-trace';
+          edge.style({ opacity: 0.95 });
+          edge.addClass(edgeCls);
+
+          const srcNode = edge.source();
+          const tgtNode = edge.target();
+          animateFlux(srcNode, tgtNode, EDGE_LEAD);
+        }
+      }, levelStart + idx * FLUX_STAGGER));
+    });
+
+    // C. Activation des nœuds à l'arrivée de leur flux (idem échelonnés)
+    levelItems.forEach((item, idx) => {
+      simTimeouts.push(setTimeout(() => {
+        const node = cy.getElementById(item.nodeId);
+        const lv = shockLevel[item.nodeId] || 0;
+        node.style({ opacity: 1 });
+
+        let cls = 'sim-trace';
+        if (lv >= 0.75) cls = 'sim-high';
+        else if (lv >= 0.45) cls = 'sim-med';
+        else if (lv >= 0.20) cls = 'sim-low';
+        node.addClass(cls);
+
+        pulseNode(node);
+
+        if (stabActive) {
+          node.incomers('edge').forEach(inEdge => {
+            if (inEdge.data('type') === 'stabilizer') {
+              const stabSource = cy.getElementById(inEdge.data('source'));
+              stabSource.style({ opacity: 1 }).addClass('sim-stabilizer-active');
+              inEdge.style({ opacity: 0.9 }).addClass('sim-edge-stabilizer');
+              animateFlux(stabSource, node, 1800);
+            }
+          });
+        }
+      }, levelStart + idx * FLUX_STAGGER + EDGE_LEAD));
+    });
+
+    // D. Mise à jour du statut sidebar à la fin du niveau
+    simTimeouts.push(setTimeout(() => {
+      const activatedSoFar = levels.slice(0, lvl + 1).flat().length;
+      document.getElementById('sim-status').textContent =
+        `Niveau ${lvl} · ${activatedSoFar}/${totalActivated} nœuds activés`;
+    }, levelStart + levelItems.length * FLUX_STAGGER + EDGE_LEAD));
+  }
+
+  // Timing de fin complet
+  const totalDuration = (levelTransitions.length > 0)
+    ? levelStarts[levelTransitions.length] + EDGE_LEAD + 300
+    : EDGE_LEAD + 300;
+
+  // Statut final avec info sur les stabilisateurs + masquage compteur
+  simTimeouts.push(setTimeout(() => {
+    let finalMsg = `✓ Propagation terminée · ${totalActivated} nœuds atteints sur ${totalLevels} niveau${totalLevels > 1 ? 'x' : ''}`;
+    if (stabActive && stabilizersActivated.size > 0) {
+      finalMsg += ` · ${stabilizersActivated.size} stabilisateur${stabilizersActivated.size > 1 ? 's' : ''} mobilisé${stabilizersActivated.size > 1 ? 's' : ''}`;
+    } else if (!stabActive) {
+      finalMsg += ` · ⚠ sans stabilisateurs`;
+    }
+    document.getElementById('sim-status').textContent = finalMsg;
+
+    // Mise à jour finale du compteur
+    counter.classList.add('transitioning');
+    document.getElementById('level-counter-num').textContent = totalLevels;
+    document.getElementById('level-counter-label').textContent = '✓ propagation terminée';
+    setTimeout(() => counter.classList.remove('transitioning'), 400);
+
+    simRunning = false;
+  }, totalDuration));
+}
+
+function resetSimulation(keepMode = false) {
+  simTimeouts.forEach(t => clearTimeout(t));
+  simTimeouts = [];
+  simRunning = false;
+
+  clearAllFlux();
+
+  // Masquer le compteur
+  const counter = document.getElementById('level-counter');
+  if (counter) counter.classList.remove('visible', 'transitioning');
+
+  cy.nodes().forEach(n => {
+    n.removeClass('sim-source sim-high sim-med sim-low sim-trace sim-stabilizer-active');
+    n.style({ opacity: '' });
+  });
+  cy.edges().forEach(e => {
+    e.removeClass('sim-edge-active sim-edge-trace sim-edge-stabilizer');
+    e.style({ opacity: '' });
+  });
+
+  document.getElementById('sim-status').textContent =
+    simSelectedNode ? 'Cliquez "Lancer le choc" pour propager.' : 'Cliquez un nœud puis lancez le choc.';
+  document.getElementById('sim-reset-btn').classList.remove('visible');
+
+  if (simMode && !keepMode) {
+    document.getElementById('sim-hint').classList.add('visible');
+  }
+}
+
+function refreshSelectionDisplay() {
+  if (currentMode === 'loops') return;
+
+  // Reset des classes visuelles
+  cy.elements().removeClass('highlighted highlighted-edge dimmed');
+
+  if (selectedNodes.size === 0) {
+    // Plus aucune sélection → tout redevient visible
+    showDefault();
+    return;
+  }
+
+  // Construire l'ensemble des nœuds et arêtes à mettre en évidence
+  const nodesToShow = new Set(selectedNodes);
+  const edgesToHighlight = new Set();
+
+  selectedNodes.forEach(id => {
+    const node = cy.getElementById(id);
+    node.connectedEdges().forEach(e => {
+      if (e.data('cluster')) return;
+      edgesToHighlight.add(e.id());
+      nodesToShow.add(e.source().id());
+      nodesToShow.add(e.target().id());
+    });
+  });
+
+  // Dim tout par défaut
+  cy.elements().addClass('dimmed');
+
+  // Puis retirer le dim des éléments concernés
+  nodesToShow.forEach(id => cy.getElementById(id).removeClass('dimmed'));
+  edgesToHighlight.forEach(id => {
+    cy.getElementById(id).removeClass('dimmed').addClass('highlighted-edge');
+  });
+
+  // Marquer les nœuds sélectionnés (distingués des voisins)
+  selectedNodes.forEach(id => cy.getElementById(id).addClass('highlighted'));
+
+  // Panneau de détail : afficher le dernier nœud cliqué encore sélectionné
+  if (lastSelectedId && selectedNodes.has(lastSelectedId)) {
+    showNodeDetail(cy.getElementById(lastSelectedId));
+  } else if (selectedNodes.size > 0) {
+    const firstId = Array.from(selectedNodes)[0];
+    lastSelectedId = firstId;
+    showNodeDetail(cy.getElementById(firstId));
+  }
+}
+
+function clearHighlight() {
+  cy.elements().removeClass('highlighted highlighted-edge dimmed');
+  selectedNodes.clear();
+  lastSelectedId = null;
+}
+
+function showDefault() {
+  document.getElementById('node-detail').innerHTML = `
+    <p style="color:#555;font-size:11px;line-height:1.6;">Cliquez sur un nœud pour afficher ses détails. Les clics suivants <strong style="color:#888;">cumulent</strong> la mise en évidence. Clic dans le vide = tout désélectionner.</p>
+  `;
+}
+
+function showNodeDetail(node) {
+  const d = node.data();
+  const typeLabels = {
+    source: { label: 'Choc exogène / Source', color: '#c0392b' },
+    amplifier: { label: 'Amplificateur / Transmetteur', color: '#e67e22' },
+    output: { label: 'Variable de sortie', color: '#2980b9' },
+    stabilizer: { label: 'Variable d\'ajustement', color: '#27ae60' },
+    geo: { label: 'Angle mort géopolitique', color: '#c9a227' },
+  };
+  const t = typeLabels[d.type] || { label: d.type, color: '#888' };
+  const geoBadge = d.geo ? `<span class="geo-badge">GÉO</span>` : '';
+  const originalBadge = d.original === false && !d.geo ? `<span class="new-badge">AJOUT</span>` : '';
+
+  const inEdges = node.incomers('node').map(n => `<div class="conn-item">← ${n.data('label').replace(/\n/g,' ')}</div>`).join('');
+  const outEdges = node.outgoers('node').map(n => `<div class="conn-item">→ ${n.data('label').replace(/\n/g,' ')}</div>`).join('');
+
+  // Boucles d'appartenance
+  const loopIds = nodeLoops[d.id] || [];
+  let loopBadges = '';
+  if (loopIds.length > 0) {
+    loopBadges = `
+      <div class="in-loops-badges">
+        <div class="conn-label">Appartient à ${loopIds.length} boucle${loopIds.length > 1 ? 's' : ''}</div>
+        ${loopIds.map(lid => {
+          const l = loopById[lid];
+          return `<span class="in-loops-badge ${l.category}" onclick="setMode('loops'); selectLoop('${lid}');">↻ ${l.name}</span>`;
+        }).join('')}
+      </div>
+    `;
+  }
+
+  document.getElementById('node-detail').innerHTML = `
+    <div id="node-title">${d.label.replace(/\n/g,' ')} ${originalBadge}${geoBadge}</div>
+    <div id="node-type-badge" style="background:${t.color}22;color:${t.color};border:1px solid ${t.color}55;">${t.label}</div>
+    <div id="node-desc">${d.desc || 'Aucune description disponible.'}</div>
+    ${loopBadges}
+    <div id="connections-info">
+      ${inEdges ? `<div class="conn-label">Reçoit de</div>${inEdges}` : ''}
+      ${outEdges ? `<div class="conn-label" style="margin-top:8px;">Émet vers</div>${outEdges}` : ''}
+    </div>
+  `;
+}
+
+function resetView() {
+  cy.animate({ fit: { eles: cy.elements(), padding: 30 }, easing: 'ease-in-out-cubic', duration: 600 });
+}
+</script>
+</body>
+</html>
