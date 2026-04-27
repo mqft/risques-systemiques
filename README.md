@@ -1,8 +1,15 @@
+## Fonction
+
+Exercice de modélisation systémique : isoler les feedback loops dominantes d'un système complexe, suivre leurs délais et leurs interactions. 
+Aussi un outil pour poser un sujet et structurer la réflexion autour — rendre visible ce qui d'habitude se discute en abstraction.
+Version test, légère — un prototype d'idée plutôt qu'un outil abouti.
+
 
 ## Utilisation
 
 Ouvrir `index.html` dans un navigateur. Aucune dépendance.
-cliquez sur les nœuds, survolez les liaisons, visualisez les boucles de rétro-action, simulez un choc
+cliquez sur les nœuds, manipulez les, survolez les liaisons, visualisez les boucles de rétro-action, simulez un choc.
+
 
 ## Code
 
