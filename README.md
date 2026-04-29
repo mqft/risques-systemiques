@@ -13,7 +13,7 @@ cliquez sur les nœuds, manipulez les, survolez les liaisons, visualisez les bou
 
 ## Code
 
-Code généré avec l'aide d'un assistant IA (Claude). La modélisation, le choix des boucles et la logique d'interaction sont les miennes ; l'écriture du JavaScript et du CSS est largement déléguée. Fichier HTML monolithique, ~2700 lignes — objet exploratoire, pas une référence d'architecture.
+Code généré avec l'aide d'un assistant IA (Claude). La modélisation, le choix des boucles et la logique d'interaction sont les miennes (en écriture) ; l'écriture du JavaScript et du CSS est largement déléguée. Fichier HTML monolithique, ~2700 lignes — objet exploratoire, pas une référence d'architecture.
 
 
 ## Licence
